@@ -16,6 +16,20 @@ operator (Okou, human)        --HTTPS> Cloudflare Access /ops/*    --> Worker --
 - `firmware/`: ESP-IDF launcher, `okou_agent` SDK, `hello_app` example, QEMU end-to-end tests.
 - `hub/`: Cloudflare Worker + Durable Objects (SQLite storage), operator HTTP API.
 
+## Adding a device
+
+1. Flash any ESP32-S3 once over USB with the launcher from the latest `fw-v*` release
+   (`bootloader`, `partition-table`, `ota_data_initial`, `esp-launcher` for `esp32s3-generic`).
+   An unprovisioned launcher stays in setup mode and advertises BLE as `okl-xxxxxx`.
+2. Open **https://hub.c3p0.dev/ops/setup** in desktop or Android Chrome (Access login), connect
+   to the device, enter a device ID and Wi-Fi, press "注册并写入设备". The hub issues a per-device
+   Access service token, registers the device and the page writes Wi-Fi + token over BLE, then
+   shows wifi → hub → online.
+3. From then on Okou manages the device through the hub (`/ops/devices/<id>`): logs, commands,
+   params, signed app and launcher updates, rollback events, crash symbolization.
+
+`DELETE /ops/devices/<id>` removes the device and revokes its token.
+
 ## Safety model
 
 - Only the bootloader and partition table need USB (first flash and recovery).
