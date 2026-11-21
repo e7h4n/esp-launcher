@@ -35,7 +35,11 @@ operator (Okou, human)        --HTTPS> Cloudflare Access /ops/*    --> Worker --
   with its own service token; then remotely: status, commands, a CI-signed app installed over the
   network (streamed, signature-checked, switched, marked valid after hub ack), live logs and
   metrics, real-time `param.set` with persistence, reboot to launcher and back.
-- Not yet on hardware: BLE provisioning, launcher self-update, crash rollback (covered in QEMU),
-  M5Stack StopWatch board bring-up.
+- Also on that board (2026-11-22): remote launcher self-update in both directions
+  (launcher_a <-> launcher_b, signed, validated after hub ack, then app auto-start); launcher
+  rollback (chip reset while the new launcher was pending verify -> bootloader returned to the
+  old launcher); app crash before hub ack -> rollback to the launcher (`rolled_back=true`,
+  app `aborted`) with a readable core dump.
+- Not yet on hardware: BLE provisioning, M5Stack StopWatch board bring-up.
 
 MIT licensed.
