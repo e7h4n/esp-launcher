@@ -20,6 +20,7 @@ jobs:
       matrix:
         include:
           - { variant: esp32s3, target: esp32s3, qemu: false } # M5Stack StopWatch, 16 MB
+          - { variant: esp32s3-generic, target: esp32s3, qemu: false } # generic ESP32-S3, 16 MB
           - { variant: esp32, target: esp32, qemu: false }     # ESP32 classic, 4 MB, Wi-Fi + BLE
           - { variant: esp32-qemu, target: esp32, qemu: true } # QEMU: 16 MB, OpenCores Ethernet, dev key
     steps:
@@ -33,6 +34,9 @@ jobs:
           cd firmware
           V=${{ matrix.variant }} T=${{ matrix.target }}
           L_DEF=() A_DEF=()
+          if [ "$V" = "esp32s3-generic" ]; then
+            L_DEF=("-DSDKCONFIG_DEFAULTS=../sdkconfig.common;sdkconfig.defaults;../sdkconfig.s3generic")
+          fi
           if [ "${{ matrix.qemu }}" = "true" ]; then
             L_DEF=("-DSDKCONFIG_DEFAULTS=../sdkconfig.common;sdkconfig.defaults;../sdkconfig.qemu")
             A_DEF=("-DSDKCONFIG_DEFAULTS=../../sdkconfig.common;sdkconfig.defaults;../../sdkconfig.qemu")
@@ -110,7 +114,7 @@ jobs:
             echo "SIGNED=no" >> "$GITHUB_ENV"
           fi
           # Release images only for hardware variants (QEMU builds embed the dev key).
-          for chip in esp32s3 esp32; do
+          for chip in esp32s3 esp32s3-generic esp32; do
             a="artifacts/fw-$chip"
             if [ -n "$KEY" ]; then
               firmware/tools/sign.sh "$a/esp-launcher.bin" "$KEY" esp-launcher "$VERSION" "$chip" launcher dist

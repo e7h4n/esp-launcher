@@ -26,7 +26,12 @@ def main():
     line = "OKL-PROVISION " + json.dumps(payload, separators=(",", ":")) + "\n"
     if len(line) > 630:
         sys.exit("payload too long for the launcher (max ~630 bytes)")
-    with serial.Serial(a.port, 115200, timeout=0.2) as s:
+    s = serial.Serial()
+    s.port, s.baudrate, s.timeout = a.port, 115200, 0.2
+    s.dtr = False  # do not toggle DTR/RTS on open: on USB-Serial-JTAG that can reset the chip
+    s.rts = False
+    s.open()
+    with s:
         time.sleep(0.5)
         s.reset_input_buffer()
         s.write(line.encode())
