@@ -27,7 +27,15 @@ operator (Okou, human)        --HTTPS> Cloudflare Access /ops/*    --> Worker --
 
 ## Status
 
-v0.1: the full QEMU end-to-end suite (16 cases, ESP32 with emulated Ethernet) passes against
-the real hub code. Wi-Fi, TLS through Cloudflare and BLE provisioning still need real hardware.
+- QEMU end-to-end suite (16 cases, ESP32 with emulated Ethernet) passes against the real hub code.
+- Production hub `hub.c3p0.dev`: deployed by CI, Access-protected; a simulated device passes the
+  17-case production e2e on every hub deploy.
+- **Real hardware (2026-11-22, ESP32-S3R8 board on USB to a Cardputer Zero):** generic launcher
+  flashed over USB, provisioned over USB serial, joined Wi-Fi, connected through Cloudflare Access
+  with its own service token; then remotely: status, commands, a CI-signed app installed over the
+  network (streamed, signature-checked, switched, marked valid after hub ack), live logs and
+  metrics, real-time `param.set` with persistence, reboot to launcher and back.
+- Not yet on hardware: BLE provisioning, launcher self-update, crash rollback (covered in QEMU),
+  M5Stack StopWatch board bring-up.
 
 MIT licensed.
