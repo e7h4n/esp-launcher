@@ -224,13 +224,10 @@ esp_err_t okou_nvs_init(void)
     if (done) {
         return ESP_OK;
     }
+    /* Never erase: the NVS partition is shared with the app and holds its settings
+     * (Wi-Fi, accounts, calibration). An unusable NVS is reported, not wiped; recovering it
+     * is a deliberate USB operation that can back the data up first. */
     esp_err_t e = nvs_flash_init();
-    if (e == ESP_ERR_NVS_NO_FREE_PAGES || e == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        /* Do not silently wipe: existing devices keep Wi-Fi settings here. Erase only
-         * when the partition is unusable as-is (same policy as IDF examples). */
-        nvs_flash_erase();
-        e = nvs_flash_init();
-    }
     if (e == ESP_ERR_INVALID_STATE) { /* already initialised by the app */
         e = ESP_OK;
     }
