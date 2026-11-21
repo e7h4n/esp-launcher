@@ -1,0 +1,2 @@
+# hello_app: sample app for esp-launcher (see firmware/README.md).
+CONFIG_OKOU_LOG_BUF_SIZE=16384

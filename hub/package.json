@@ -1,0 +1,14 @@
+{
+  "name": "esp-launcher-hub",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --var DEV_INSECURE:1 --port 8787 --ip 0.0.0.0",
+    "deploy": "wrangler deploy",
+    "test": "node --test test/"
+  },
+  "devDependencies": {
+    "wrangler": "^4.40.0"
+  }
+}

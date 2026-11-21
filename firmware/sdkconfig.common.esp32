@@ -1,0 +1,3 @@
+# ESP32 classic hardware: 4 MB flash, factory launcher + one app slot.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions/4mb.csv"

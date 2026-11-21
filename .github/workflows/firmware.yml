@@ -1,0 +1,142 @@
+name: firmware
+
+on:
+  push:
+    paths: ["firmware/**", ".github/workflows/firmware.yml"]
+  pull_request:
+    paths: ["firmware/**", ".github/workflows/firmware.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build ${{ matrix.variant }}
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.4.1
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { variant: esp32s3, target: esp32s3, qemu: false } # M5Stack StopWatch, 16 MB
+          - { variant: esp32, target: esp32, qemu: false }     # ESP32 classic, 4 MB, Wi-Fi + BLE
+          - { variant: esp32-qemu, target: esp32, qemu: true } # QEMU: 16 MB, OpenCores Ethernet, dev key
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build launcher + hello_app
+        shell: bash
+        run: |
+          set -euo pipefail
+          . "$IDF_PATH/export.sh"
+          cd firmware
+          V=${{ matrix.variant }} T=${{ matrix.target }}
+          L_DEF=() A_DEF=()
+          if [ "${{ matrix.qemu }}" = "true" ]; then
+            L_DEF=("-DSDKCONFIG_DEFAULTS=../sdkconfig.common;sdkconfig.defaults;../sdkconfig.qemu")
+            A_DEF=("-DSDKCONFIG_DEFAULTS=../../sdkconfig.common;sdkconfig.defaults;../../sdkconfig.qemu")
+          fi
+          (cd launcher && idf.py -B "build/$V" -DIDF_TARGET="$T" -DSDKCONFIG="build/$V/sdkconfig" "${L_DEF[@]}" build)
+          (cd examples/hello_app && idf.py -B "build/$V" -DIDF_TARGET="$T" -DSDKCONFIG="build/$V/sdkconfig" "${A_DEF[@]}" build)
+          mkdir -p "$GITHUB_WORKSPACE/out/$V"
+          cp launcher/build/$V/esp-launcher.bin launcher/build/$V/bootloader/bootloader.bin \
+             launcher/build/$V/partition_table/partition-table.bin launcher/build/$V/ota_data_initial.bin \
+             launcher/build/$V/flash_args examples/hello_app/build/$V/hello-app.bin "$GITHUB_WORKSPACE/out/$V/"
+          (cd launcher && idf.py -B "build/$V" size) | tee "$GITHUB_WORKSPACE/out/$V/size-launcher.txt"
+          (cd examples/hello_app && idf.py -B "build/$V" size) | tee "$GITHUB_WORKSPACE/out/$V/size-hello_app.txt"
+
+      - name: Install QEMU
+        if: matrix.qemu
+        shell: bash
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libslirp0 libsdl2-2.0-0 libpixman-1-0 libglib2.0-0
+          python3 "$IDF_PATH/tools/idf_tools.py" install qemu-xtensa
+
+      - name: QEMU end-to-end test (mock hub)
+        if: matrix.qemu
+        shell: bash
+        run: |
+          set -euo pipefail
+          . "$IDF_PATH/export.sh"
+          firmware/test/run_qemu_e2e.sh --mock
+
+      - name: Upload test logs
+        if: matrix.qemu && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-e2e-logs
+          path: firmware/test/out/
+          if-no-files-found: ignore
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: fw-${{ matrix.variant }}
+          path: out/${{ matrix.variant }}/
+
+  release:
+    name: sign + release
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: fw-esp32*
+          path: artifacts
+
+      - name: Sign (when FIRMWARE_SIGNING_KEY is set) and assemble assets
+        shell: bash
+        env:
+          FIRMWARE_SIGNING_KEY: ${{ secrets.FIRMWARE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          VERSION=$(tr -d ' \n\r' < firmware/version.txt)
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          mkdir -p dist
+          KEY=
+          if [ -n "${FIRMWARE_SIGNING_KEY:-}" ]; then
+            KEY="$RUNNER_TEMP/signing_key.pem"
+            (umask 077; printf '%s\n' "$FIRMWARE_SIGNING_KEY" > "$KEY")
+            echo "SIGNED=yes" >> "$GITHUB_ENV"
+          else
+            echo "::warning::FIRMWARE_SIGNING_KEY is not set: publishing UNSIGNED binaries (the launcher will reject them for OTA install)"
+            echo "SIGNED=no" >> "$GITHUB_ENV"
+          fi
+          # Release images only for hardware variants (QEMU builds embed the dev key).
+          for chip in esp32s3 esp32; do
+            a="artifacts/fw-$chip"
+            if [ -n "$KEY" ]; then
+              firmware/tools/sign.sh "$a/esp-launcher.bin" "$KEY" esp-launcher "$VERSION" "$chip" launcher dist
+              firmware/tools/sign.sh "$a/hello-app.bin" "$KEY" hello-app "$VERSION" "$chip" app dist
+            else
+              cp "$a/esp-launcher.bin" "dist/esp-launcher-$VERSION-$chip.bin"
+              cp "$a/hello-app.bin" "dist/hello-app-$VERSION-$chip.bin"
+            fi
+            # First-time USB flashing helpers (not OTA-installable, not signed).
+            cp "$a/bootloader.bin" "dist/bootloader-$VERSION-$chip.bin"
+            cp "$a/partition-table.bin" "dist/partition-table-$VERSION-$chip.bin"
+            cp "$a/ota_data_initial.bin" "dist/ota_data_initial-$VERSION-$chip.bin"
+          done
+          [ -n "$KEY" ] && rm -f "$KEY"
+          ls -l dist
+
+      - name: Publish GitHub release fw-v${{ env.VERSION }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="fw-v$VERSION"
+          NOTES="esp-launcher firmware $VERSION ($GITHUB_SHA). Signed: $SIGNED."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "firmware $VERSION" --notes "$NOTES"
+          fi

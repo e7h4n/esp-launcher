@@ -1,0 +1,11 @@
+# Overlay for Espressif QEMU (ESP32 classic). Appended last via
+#   -DSDKCONFIG_DEFAULTS="../sdkconfig.common;sdkconfig.defaults;../sdkconfig.qemu"
+# (hello_app uses ../../ prefixes). Uses the same 16 MB layout as the real device.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions/16mb.csv"
+CONFIG_ETH_USE_OPENETH=y
+CONFIG_OKOU_NET_OPENETH=y
+CONFIG_BT_ENABLED=n
+# QEMU tests sign with the TEST ONLY dev key regardless of keys/release_pub.pem.
+CONFIG_OKL_KEY_DEV=y
+CONFIG_OKL_PROV_BUTTON_GPIO=-1
