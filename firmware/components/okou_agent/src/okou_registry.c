@@ -417,8 +417,10 @@ static int cmd_version(int argc, char **argv, okou_out_t *out)
 
 static int cmd_heap(int argc, char **argv, okou_out_t *out)
 {
-    okou_outf(out, "free %u min_free %u largest_internal %u\n", (unsigned)esp_get_free_heap_size(),
-              (unsigned)esp_get_minimum_free_heap_size(),
+    okou_outf(out, "free %u min_free %u internal_free %u internal_min_free %u largest_internal %u\n",
+              (unsigned)esp_get_free_heap_size(), (unsigned)esp_get_minimum_free_heap_size(),
+              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
               (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     size_t ps = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     if (ps) {

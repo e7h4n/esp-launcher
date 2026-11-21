@@ -52,7 +52,10 @@ Production never accepts it.
  "reset_reason":"ESP_RST_SW",
  "rolled_back":false,           // true when bootloader rolled back the previous image
  "pending_install":null,        // or {"sha256":"...","state":"..."} while an install is in progress
- "heap_free":123456,"uptime_ms":4200}
+ "heap_free":123456,             // all heaps, PSRAM included
+ "heap_internal_free":41000,     // internal RAM (task stacks, DMA); the scarce one on busy apps
+ "heap_internal_largest":20480,  // largest internal block; the hub task needs about 5.5 KB
+ "uptime_ms":4200}
 ```
 
 `log` (batched console output; `seq` is the device-side sequence of the first line, scoped to `boot_id`):

@@ -26,6 +26,7 @@
 #include "esp_ota_ops.h"
 #include "esp_crt_bundle.h"
 #include "esp_websocket_client.h"
+#include "esp_heap_caps.h"
 #include "sdkconfig.h"
 #include "okou_priv.h"
 
@@ -343,6 +344,9 @@ static void hello_fill(cJSON *o)
     }
     cJSON_Delete(pj);
     cJSON_AddNumberToObject(o, "heap_free", esp_get_free_heap_size());
+    cJSON_AddNumberToObject(o, "heap_internal_free", heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    cJSON_AddNumberToObject(o, "heap_internal_largest",
+                            heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     cJSON_AddNumberToObject(o, "uptime_ms", (double)(now_us() / 1000));
 }
 
@@ -459,6 +463,12 @@ static void ws_connect(void)
     s_conn_start_us = now_us();
     ESP_LOGI(TAG, "connecting to %s", s_url);
     if (esp_websocket_client_start(s_ws) != ESP_OK) {
+        /* Usually the websocket task stack (internal RAM) could not be allocated: say how much
+         * internal RAM is left so an app that is out of it can be diagnosed from the log. */
+        ESP_LOGE(TAG, "hub connection not started: internal RAM free %u, largest block %u (task needs %u)",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                 (unsigned)c.task_stack);
         esp_websocket_client_destroy(s_ws);
         s_ws = NULL;
         s_next_connect_us = now_us() + 5000 * US_PER_MS;
