@@ -64,7 +64,7 @@ def http(method, path, tok=OPS, body=None, raw=None, timeout=40):
 
 
 def record(name, ok, detail=""):
-    results.append((name, ok))
+    results.append((name, bool(ok)))
     print(f"[{'PASS' if ok else 'FAIL'}] {name}: {detail}", flush=True)
 
 
