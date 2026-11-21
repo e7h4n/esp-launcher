@@ -40,6 +40,9 @@ operator (Okou, human)        --HTTPS> Cloudflare Access /ops/*    --> Worker --
   rollback (chip reset while the new launcher was pending verify -> bootloader returned to the
   old launcher); app crash before hub ack -> rollback to the launcher (`rolled_back=true`,
   app `aborted`) with a readable core dump.
+- Also verified on that board (0.1.7): `rollback` events reach the hub for both a launcher
+  rollback and an app rollback, and `firmware/tools/symbolize.py --device paper-1` maps a crash to
+  `hello_app/main/main.c:53` using the ELF published in release `fw-v0.1.7`.
 - Not yet on hardware: BLE provisioning, M5Stack StopWatch board bring-up.
 
 MIT licensed.
