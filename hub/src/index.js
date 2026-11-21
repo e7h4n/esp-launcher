@@ -297,10 +297,19 @@ export class DeviceHub extends DurableObject {
     let lastSeen = this.kvGet("last_seen");
     if (ws) {
       const ts = this.ctx.getWebSocketAutoResponseTimestamp(ws);
-      lastSeen = Math.max(lastSeen || 0, ts ? ts.getTime() : 0, this.kvGet("last_msg") || 0);
+      lastSeen = Math.max(lastSeen || 0, ts ? ts.getTime() : 0, this.kvGet("last_msg") || 0,
+        this.kvGet("connected_at") || 0);
+    }
+    // A socket whose peer vanished without a close frame can linger; devices ping every 30 s,
+    // so treat >90 s of silence as offline (and drop the stale socket).
+    const fresh = !!ws && !!lastSeen && Date.now() - lastSeen < 90_000;
+    if (ws && !fresh && lastSeen) {
+      try {
+        ws.close(4001, "stale: no ping for 90 s");
+      } catch {}
     }
     return {
-      online: !!ws,
+      online: fresh,
       role: hello?.role ?? null,
       fw: hello?.fw ?? null,
       partition: hello?.partition ?? null,
