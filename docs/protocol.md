@@ -163,6 +163,13 @@ app area (launcher slots 2.5 MB each, app 2.94 MB).
   themselves valid after their own startup health check, and the SDK applies neither the
   hub-ack validation nor the fail_boots safety net below. `CONFIG_OKOU_MAX_FAIL_BOOTS=0` also
   disables the safety net.
+- Apps that let the SDK own Wi-Fi (`manage_network = true`) and build with
+  `CONFIG_MBEDTLS_HAVE_TIME_DATE=y` must start SNTP once the station has an IP: the SDK does not
+  (apps usually own SNTP), and the hub TLS handshake fails with -0x2700 (certificate dates) until
+  the clock is set. The SDK logs a hint when this happens.
+- The SDK's tasks (agent, Wi-Fi manager, hub websocket of about 5 KB) have internal-RAM stacks.
+  Busy apps (BLE + display + TLS) should check `heap_internal_largest` in `status`; if the hub
+  connection cannot start, the log says how much internal RAM was left.
 - App-side safety net: the SDK keeps a counter in NVS `okl/fail_boots`. It is incremented at
   SDK start and reset to 0 once a hub `ack` is received. If it reaches 3, the SDK boots the
   launcher instead of continuing.

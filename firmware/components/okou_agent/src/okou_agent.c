@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <inttypes.h>
 #include <math.h>
+#include <time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -484,6 +485,16 @@ static void ws_teardown(const char *why)
     if (s_ws_up) {
         ESP_LOGW(TAG, "hub connection closed (%s)", why);
     }
+#if CONFIG_MBEDTLS_HAVE_TIME_DATE
+    /* With certificate date checks on, TLS to the hub fails until the clock is set. The SDK does
+     * not start SNTP itself (apps usually own it); say so instead of leaving a bare TLS error. */
+    static bool s_time_hint;
+    if (!s_ws_up && !s_time_hint && time(NULL) < 1704067200 /* 2024-01-01 */) {
+        s_time_hint = true;
+        ESP_LOGW(TAG, "system time is not set and CONFIG_MBEDTLS_HAVE_TIME_DATE is on: the hub "
+                      "certificate cannot be verified until the app starts SNTP");
+    }
+#endif
     s_ws_up = false;
     s_hello_acked = false;
     s_gen++; /* ignore late events from the old client */
