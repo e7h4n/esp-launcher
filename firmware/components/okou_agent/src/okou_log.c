@@ -185,7 +185,7 @@ esp_err_t okou_log_init(void)
     while ((cap << 1) <= (uint32_t)CONFIG_OKOU_LOG_BUF_SIZE) {
         cap <<= 1;
     }
-    s_buf = heap_caps_malloc(cap, MALLOC_CAP_8BIT);
+    s_buf = okou_malloc_large(cap);
     if (!s_buf) {
         return ESP_ERR_NO_MEM;
     }

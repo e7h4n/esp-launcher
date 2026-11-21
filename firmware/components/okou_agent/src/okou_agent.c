@@ -397,7 +397,7 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *event_d
             if (!s_rx_skip && (size_t)d->payload_len + 1 > s_rx_acc_cap) {
                 free(s_rx_acc);
                 s_rx_acc_cap = (size_t)d->payload_len + 1;
-                s_rx_acc = malloc(s_rx_acc_cap);
+                s_rx_acc = okou_malloc_large(s_rx_acc_cap);
                 if (!s_rx_acc) {
                     s_rx_acc_cap = 0;
                     s_rx_skip = true;
@@ -1060,7 +1060,7 @@ esp_err_t okou_agent_start(const okou_config_t *cfg)
     }
 
     okou_registry_builtin_cmds();
-    s_txbuf = malloc(CONFIG_OKOU_TX_FRAME_MAX + 1);
+    s_txbuf = okou_malloc_large(CONFIG_OKOU_TX_FRAME_MAX + 1);
     if (!s_txbuf) {
         return ESP_ERR_NO_MEM;
     }

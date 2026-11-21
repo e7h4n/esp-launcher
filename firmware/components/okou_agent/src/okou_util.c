@@ -9,6 +9,7 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "okou_priv.h"
+#include "esp_heap_caps.h"
 
 /* Length of a valid UTF-8 sequence starting at s (max n bytes), or 0 if invalid. */
 static size_t utf8_len(const unsigned char *s, size_t n)
@@ -215,6 +216,19 @@ void okou_hex(const uint8_t *in, size_t n, char *out)
         out[2 * i + 1] = hex[in[i] & 0xf];
     }
     out[2 * n] = '\0';
+}
+
+/* Large SDK buffers go to PSRAM when the app has it, leaving internal RAM for the BT/Wi-Fi
+ * controllers and DMA (coffee-watch's BLE init failed when the SDK took ~30 KB internal RAM). */
+void *okou_malloc_large(size_t size)
+{
+#if CONFIG_SPIRAM
+    void *p = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (p) {
+        return p;
+    }
+#endif
+    return malloc(size);
 }
 
 /* ---- NVS helpers (namespace okl) ---- */

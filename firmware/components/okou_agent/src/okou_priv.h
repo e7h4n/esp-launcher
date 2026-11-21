@@ -29,6 +29,7 @@ esp_err_t okou_param_get_json(const char *name, cJSON *data, char *err, size_t e
 esp_err_t okou_param_set_json(const cJSON *args, cJSON *data, char *err, size_t errlen);
 
 /* ---- network (okou_net.c) ---- */
+void *okou_malloc_large(size_t size);
 esp_err_t okou_net_start(bool manage);
 esp_err_t okou_wifi_init(void);
 void okou_wifi_on_started(void);
