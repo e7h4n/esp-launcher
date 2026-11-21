@@ -37,6 +37,14 @@ def hdr(tok):
     return h
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):
+        return None
+
+
+_opener = urllib.request.build_opener(_NoRedirect)
+
+
 def http(method, path, tok=OPS, body=None, raw=None, timeout=40):
     data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
     h = hdr(tok)
@@ -44,7 +52,7 @@ def http(method, path, tok=OPS, body=None, raw=None, timeout=40):
         h["Content-Type"] = "application/json"
     req = urllib.request.Request(f"https://{HUB}{path}", data=data, method=method, headers=h)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _opener.open(req, timeout=timeout) as r:
             b = r.read()
             st = r.status
     except urllib.error.HTTPError as e:
