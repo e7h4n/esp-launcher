@@ -34,9 +34,15 @@ typedef struct {
     /* false (default): command handlers run on the agent task.
      * true: `cmd` requests are queued and run inside okou_poll() on the caller's task. */
     bool handlers_in_poll;
+    /* false (default): the SDK marks a freshly installed app valid once the hub acknowledged
+     * its hello, and boots the launcher after CONFIG_OKOU_MAX_FAIL_BOOTS boots without a hub
+     * ack. true: the app runs its own startup health check and calls
+     * esp_ota_mark_app_valid_cancel_rollback() itself; the SDK neither marks the app valid nor
+     * applies the fail_boots safety net. Use this for devices that must keep working offline. */
+    bool app_validates;
 } okou_config_t;
 
-#define OKOU_CONFIG_DEFAULT() { .role = OKOU_ROLE_APP, .manage_network = true, .handlers_in_poll = false }
+#define OKOU_CONFIG_DEFAULT() { .role = OKOU_ROLE_APP, .manage_network = true, .handlers_in_poll = false, .app_validates = false }
 
 /* One-call init: NVS, log tee, network (optional), agent task. cfg may be NULL (defaults).
  * For role=app it also implements the fail_boots safety net (may reboot into the launcher). */

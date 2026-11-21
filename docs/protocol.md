@@ -136,12 +136,19 @@ Install rules:
 
 Partition roles (labels are fixed): `launcher_a`, `launcher_b` (ota_0, ota_1), `app` (ota_2).
 Small-flash layout (4 MB) uses `factory` for the launcher and `app` (ota_0); launcher self-update is
-then USB only.
+then USB only. `partitions/16mb-legacy.csv` (used by the esp32s3 / M5Stack StopWatch builds) keeps
+`nvs` 0x9000, `phy_init` 0xf000, `otadata` 0x810000 and `storage` 0x812000 of the classic IDF
+dual-OTA layout, so migrating such a device rewrites only the partition table, otadata and the
+app area (launcher slots 2.5 MB each, app 2.94 MB).
 
 - `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` on all builds.
 - The launcher boots the app by `esp_ota_set_boot_partition(app)` + restart. The new app starts
   in PENDING_VERIFY. The SDK marks it valid only after the hub acknowledged its `hello`.
   A crash, watchdog reset or power cycle before that rolls back to the launcher slot.
+- Apps that must keep working offline set `okou_config_t.app_validates = true`: they mark
+  themselves valid after their own startup health check, and the SDK applies neither the
+  hub-ack validation nor the fail_boots safety net below. `CONFIG_OKOU_MAX_FAIL_BOOTS=0` also
+  disables the safety net.
 - App-side safety net: the SDK keeps a counter in NVS `okl/fail_boots`. It is incremented at
   SDK start and reset to 0 once a hub `ack` is received. If it reaches 3, the SDK boots the
   launcher instead of continuing.
@@ -166,6 +173,13 @@ answers with a notify `{"ok":true}` or `{"ok":false,"error":"..."}`, then tries 
 notifies `{"state":"wifi"|"hub"|"online"|"error","detail":"..."}`. BLE advertising name is
 `okl-<last 3 MAC bytes hex>`. Provisioning is open only while the launcher has no hub
 connection or the user holds the BOOT button for 3 s.
+
+### USB serial provisioning
+
+The launcher also reads its console (USB-Serial-JTAG on ESP32-S3, UART0 otherwise). A line
+`OKL-PROVISION <same JSON object>` stores the payload exactly like BLE and answers
+`OKL-PROVISION-OK` or `OKL-PROVISION-ERR <reason>`. The line is never echoed or logged. This is
+the path used during the first USB flash.
 
 ## Signing
 

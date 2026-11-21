@@ -827,7 +827,7 @@ int okou_poll(uint32_t timeout_ms)
 static void on_first_ack(void)
 {
     ESP_LOGI(TAG, "hello acknowledged by hub");
-    if (g_okou_cfg.role == OKOU_ROLE_APP) {
+    if (g_okou_cfg.role == OKOU_ROLE_APP && !g_okou_cfg.app_validates) {
         const esp_partition_t *run = esp_ota_get_running_partition();
         esp_ota_img_states_t st;
         if (esp_ota_get_state_partition(run, &st) == ESP_OK && st == ESP_OTA_IMG_PENDING_VERIFY) {
@@ -977,7 +977,7 @@ esp_err_t okou_agent_start(const okou_config_t *cfg)
     snprintf(s_boot_id, sizeof(s_boot_id), "%08" PRIx32, esp_random());
     s_rolled_back = esp_ota_get_last_invalid_partition() != NULL;
 
-    if (g_okou_cfg.role == OKOU_ROLE_APP) {
+    if (g_okou_cfg.role == OKOU_ROLE_APP && !g_okou_cfg.app_validates && CONFIG_OKOU_MAX_FAIL_BOOTS > 0) {
         uint8_t fb = okou_nvs_get_u8(OKOU_KEY_FAIL_BOOTS, 0);
         if (fb >= CONFIG_OKOU_MAX_FAIL_BOOTS) {
             const esp_partition_t *lp = okou_launcher_partition();

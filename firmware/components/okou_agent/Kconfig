@@ -54,7 +54,8 @@ menu "okou agent (esp-launcher SDK)"
         default 2
 
     config OKOU_MAX_FAIL_BOOTS
-        int "Boots without a hub ack before the SDK boots the launcher"
+        int "Boots without a hub ack before the SDK boots the launcher (0 = never)"
+        range 0 20
         default 3
 
 endmenu

@@ -13,4 +13,10 @@ const esp_partition_t *launcher_inactive_slot(void);
 void coredump_ops_register(void);
 
 void prov_start(void);
+/* Store a provisioning JSON object (wifi/hub/token/name) in NVS namespace okl. */
+bool prov_apply(const char *line, char *err, size_t n);
+/* USB-serial provisioning: a console line "OKL-PROVISION <json>" applies the same payload. */
+void prov_serial_start(void);
+/* Board bring-up that must run before anything else (power hold etc.). */
+void board_init(void);
 void prov_open_window(uint32_t seconds);

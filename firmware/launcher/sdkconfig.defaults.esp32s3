@@ -1,0 +1,4 @@
+# esp32s3 launcher builds target the M5Stack StopWatch.
+CONFIG_OKL_BOARD_M5_STOPWATCH=y
+# StopWatch buttons: GPIO1 (select) / GPIO2 (next), active low.
+CONFIG_OKL_PROV_BUTTON_GPIO=1

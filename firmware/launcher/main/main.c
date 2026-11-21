@@ -59,6 +59,7 @@ static const esp_partition_t *app_partition_with_image(void)
 
 void app_main(void)
 {
+    board_init();
     ESP_ERROR_CHECK(okou_nvs_init());
     const esp_partition_t *run = esp_ota_get_running_partition();
     esp_ota_img_states_t st;
@@ -104,6 +105,7 @@ void app_main(void)
              run->label, s_need_validate ? " (new, awaiting hub ack)" : "", app ? "present" : "absent",
              has_pending, s_stay, hold, fail_boots, app_failed);
     prov_start();
+    prov_serial_start();
 
     int64_t t0 = esp_timer_get_time();
     int64_t autostart_at = t0 + (app_failed ? (int64_t)CONFIG_OKL_FAILSAFE_WAIT_S * 1000000
