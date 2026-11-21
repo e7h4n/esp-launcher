@@ -140,6 +140,16 @@ void app_main(void)
                     okou_event_json("launcher.valid", d);
                 }
                 s_need_validate = false;
+                /* A self-update must not leave the device parked in the launcher: once the new
+                 * launcher is validated, resume the normal auto-start (same conditions as boot). */
+                char *still_pending = okou_nvs_get_str_alloc(OKOU_KEY_PENDING);
+                bool resume = app && !still_pending && !s_stay && !hold;
+                free(still_pending);
+                if (resume && !autostart) {
+                    autostart = true;
+                    autostart_at = now + (int64_t)CONFIG_OKL_AUTOSTART_MS * 1000;
+                    ESP_LOGI(TAG, "auto-starting app in %d ms unless a hub request arrives", CONFIG_OKL_AUTOSTART_MS);
+                }
             }
             install_resume_pending();
         }
