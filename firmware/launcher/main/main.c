@@ -111,7 +111,17 @@ void app_main(void)
     int64_t autostart_at = t0 + (app_failed ? (int64_t)CONFIG_OKL_FAILSAFE_WAIT_S * 1000000
                                             : (int64_t)CONFIG_OKL_AUTOSTART_MS * 1000);
     int64_t validate_deadline = t0 + (int64_t)CONFIG_OKL_VALIDATE_TIMEOUT_S * 1000000;
-    bool autostart = app && !has_pending && !s_stay && !hold && !s_need_validate;
+    /* An unprovisioned device must stay in the launcher: the app cannot do BLE provisioning, so
+     * leaving would close the setup window. The app starts after the first hub ack instead. */
+    char *p_hub = okou_nvs_get_str_alloc("hub");
+    char *p_cid = okou_nvs_get_str_alloc("cid");
+    bool provisioned = p_hub && p_hub[0] && p_cid && p_cid[0];
+    free(p_hub);
+    free(p_cid);
+    bool autostart = app && provisioned && !has_pending && !s_stay && !hold && !s_need_validate;
+    if (app && !provisioned) {
+        ESP_LOGI(TAG, "not provisioned: staying in the launcher (BLE / USB provisioning open)");
+    }
     if (autostart) {
         ESP_LOGI(TAG, "auto-starting app in %d ms unless a hub request arrives",
                  (int)((autostart_at - t0) / 1000));
@@ -123,6 +133,7 @@ void app_main(void)
                         .pull_up_en = GPIO_PULLUP_ENABLE};
     gpio_config(&io);
 #endif
+    bool acked_once = false;
     __attribute__((unused)) int64_t btn_since = 0;
     __attribute__((unused)) bool btn_fired = false;
 
@@ -140,15 +151,19 @@ void app_main(void)
                     okou_event_json("launcher.valid", d);
                 }
                 s_need_validate = false;
-                /* A self-update must not leave the device parked in the launcher: once the new
-                 * launcher is validated, resume the normal auto-start (same conditions as boot). */
+            }
+            /* First hub ack of this boot: a self-updated launcher that just validated, or a device
+             * that was just provisioned, resumes the normal auto-start (same conditions as boot). */
+            if (!acked_once) {
+                acked_once = true;
                 char *still_pending = okou_nvs_get_str_alloc(OKOU_KEY_PENDING);
-                bool resume = app && !still_pending && !s_stay && !hold;
+                bool resume = app && !still_pending && !s_stay && !hold && !s_req_seen;
                 free(still_pending);
                 if (resume && !autostart) {
                     autostart = true;
-                    autostart_at = now + (int64_t)CONFIG_OKL_AUTOSTART_MS * 1000;
-                    ESP_LOGI(TAG, "auto-starting app in %d ms unless a hub request arrives", CONFIG_OKL_AUTOSTART_MS);
+                    autostart_at = now + (int64_t)(app_failed ? CONFIG_OKL_FAILSAFE_WAIT_S * 1000 : CONFIG_OKL_AUTOSTART_MS) * 1000;
+                    ESP_LOGI(TAG, "auto-starting app in %d ms unless a hub request arrives",
+                             (int)((autostart_at - now) / 1000));
                 }
             }
             install_resume_pending();
