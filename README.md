@@ -57,6 +57,10 @@ operator (Okou, human)        --HTTPS> Cloudflare Access /ops/*    --> Worker --
 - Also verified on that board (0.1.7): `rollback` events reach the hub for both a launcher
   rollback and an app rollback, and `firmware/tools/symbolize.py --device paper-1` maps a crash to
   `hello_app/main/main.c:53` using the ELF published in release `fw-v0.1.7`.
-- Not yet on hardware: BLE provisioning, M5Stack StopWatch board bring-up.
+- **Full new-device flow on hardware (2026-11-22, fw 0.1.8):** board erased and flashed with the
+  launcher only; provisioned from https://hub.c3p0.dev/ops/setup in desktop Chrome over Web
+  Bluetooth (hub-issued device token, new Wi-Fi network); online in seconds; then the app was
+  installed remotely from Okou and validated.
+- Not yet on hardware: M5Stack StopWatch board bring-up.
 
 MIT licensed.
