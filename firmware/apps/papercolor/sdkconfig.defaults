@@ -1,0 +1,16 @@
+# M5Stack PaperColor app for esp-launcher (ESP32-S3R8, 16 MB flash, 8 MB OPI PSRAM).
+# App-only partition table: same offsets as partitions/16mb.csv, but the launcher slots are not
+# typed "app" so the build-time size check uses the 4 MB app slot. At runtime the device's own
+# table (written with the launcher) is what counts.
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_app.csv"
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+CONFIG_FREERTOS_HZ=1000
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_OKOU_LOG_BUF_SIZE=16384

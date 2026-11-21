@@ -82,6 +82,12 @@ void app_main(void)
     if (hold) {
         okou_nvs_erase(OKOU_KEY_HOLD);
     }
+    /* okou_enter_setup() from the app: stay here with provisioning open until the hub acks,
+     * then the first-ack resume below starts the app again. */
+    uint8_t setup = okou_nvs_get_u8(OKOU_KEY_SETUP, 0);
+    if (setup) {
+        okou_nvs_erase(OKOU_KEY_SETUP);
+    }
     s_stay = okou_nvs_get_u8(OKOU_KEY_STAY, 0) != 0;
     uint8_t fail_boots = okou_nvs_get_u8(OKOU_KEY_FAIL_BOOTS, 0);
     char *pending = okou_nvs_get_str_alloc(OKOU_KEY_PENDING);
@@ -118,7 +124,10 @@ void app_main(void)
     bool provisioned = p_hub && p_hub[0] && p_cid && p_cid[0];
     free(p_hub);
     free(p_cid);
-    bool autostart = app && provisioned && !has_pending && !s_stay && !hold && !s_need_validate;
+    bool autostart = app && provisioned && !has_pending && !s_stay && !hold && !setup && !s_need_validate;
+    if (setup) {
+        ESP_LOGI(TAG, "setup requested by the app: provisioning open, app starts after the next hub ack");
+    }
     if (app && !provisioned) {
         ESP_LOGI(TAG, "not provisioned: staying in the launcher (BLE / USB provisioning open)");
     }

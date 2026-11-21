@@ -1,0 +1,12 @@
+# Build-time table for the PaperColor app (see sdkconfig.defaults). Mirrors partitions/16mb.csv;
+# launcher_a/launcher_b are declared as raw data here only to keep idf.py's app size check on the
+# 4 MB app slot. Never flash this table.
+# Name,       Type, SubType,  Offset,   Size
+nvs,          data, nvs,      0x9000,   0x6000
+otadata,      data, ota,      0xf000,   0x2000
+phy_init,     data, phy,      0x11000,  0x1000
+launcher_a,   data, 0x40,     0x20000,  0x200000
+launcher_b,   data, 0x41,     0x220000, 0x200000
+app,          app,  ota_2,    0x420000, 0x400000
+coredump,     data, coredump, 0x820000, 0x10000
+data,         data, littlefs, 0x830000, 0x7D0000

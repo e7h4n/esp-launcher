@@ -46,7 +46,14 @@ jobs:
           fi
           (cd launcher && idf.py -B "build/$V" -DIDF_TARGET="$T" -DSDKCONFIG="build/$V/sdkconfig" -DPROJECT_VER="$VERSION" "${L_DEF[@]}" build)
           (cd examples/hello_app && idf.py -B "build/$V" -DIDF_TARGET="$T" -DSDKCONFIG="build/$V/sdkconfig" -DPROJECT_VER="$VERSION" "${A_DEF[@]}" build)
+          if [ "$V" = "esp32s3-generic" ]; then
+            # M5Stack PaperColor app (M5Unified/M5GFX) for generic ESP32-S3 launchers.
+            (cd apps/papercolor && idf.py -B "build/$V" -DIDF_TARGET="$T" -DSDKCONFIG="build/$V/sdkconfig" -DPROJECT_VER="$VERSION" build)
+          fi
           mkdir -p "$GITHUB_WORKSPACE/out/$V"
+          if [ "$V" = "esp32s3-generic" ]; then
+            cp apps/papercolor/build/$V/papercolor-app.bin apps/papercolor/build/$V/papercolor-app.elf "$GITHUB_WORKSPACE/out/$V/"
+          fi
           cp launcher/build/$V/esp-launcher.bin launcher/build/$V/bootloader/bootloader.bin \
              launcher/build/$V/partition_table/partition-table.bin launcher/build/$V/ota_data_initial.bin \
              launcher/build/$V/flash_args examples/hello_app/build/$V/hello-app.bin \
@@ -123,6 +130,9 @@ jobs:
             if [ -n "$KEY" ]; then
               firmware/tools/sign.sh "$a/esp-launcher.bin" "$KEY" esp-launcher "$VERSION" "$chip" launcher dist "$a/esp-launcher.elf"
               firmware/tools/sign.sh "$a/hello-app.bin" "$KEY" hello-app "$VERSION" "$chip" app dist "$a/hello-app.elf"
+              if [ -f "$a/papercolor-app.bin" ]; then
+                firmware/tools/sign.sh "$a/papercolor-app.bin" "$KEY" papercolor-app "$VERSION" "$chip" app dist "$a/papercolor-app.elf"
+              fi
             else
               cp "$a/esp-launcher.bin" "dist/esp-launcher-$VERSION-$chip.bin"
               cp "$a/hello-app.bin" "dist/hello-app-$VERSION-$chip.bin"

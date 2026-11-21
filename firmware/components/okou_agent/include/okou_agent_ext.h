@@ -23,6 +23,7 @@ extern "C" {
 #define OKOU_KEY_STAY        "stay"       /* u8: never auto-start the app */
 #define OKOU_KEY_FAIL_BOOTS  "fail_boots" /* u8: app boots without a hub ack */
 #define OKOU_KEY_HOLD        "hold"       /* u8: one-shot "stay in launcher on next boot" (extension) */
+#define OKOU_KEY_SETUP       "setup"      /* u8: one-shot "stay in the launcher until the hub acks" */
 #define OKOU_KEY_RB          "rb"         /* str: unreported rollback record (JSON) */
 #define OKOU_KEY_RB_LAST     "rb_last"    /* str: label of the invalid partition already recorded */
 #define OKOU_KEY_LSLOT       "lslot"      /* str: label of the last validated launcher slot (extension) */

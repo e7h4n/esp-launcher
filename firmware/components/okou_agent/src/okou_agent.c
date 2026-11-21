@@ -874,6 +874,23 @@ static void report_rollback(void)
     okou_nvs_erase(OKOU_KEY_RB);
 }
 
+esp_err_t okou_enter_setup(void)
+{
+    const esp_partition_t *lp = okou_launcher_partition();
+    if (!lp) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    okou_nvs_set_u8(OKOU_KEY_SETUP, 1);
+    esp_err_t e = esp_ota_set_boot_partition(lp);
+    if (e != ESP_OK) {
+        return e;
+    }
+    ESP_LOGW(TAG, "entering setup: rebooting into %s for provisioning", lp->label);
+    vTaskDelay(pdMS_TO_TICKS(200));
+    esp_restart();
+    return ESP_OK;
+}
+
 static void on_first_ack(void)
 {
     ESP_LOGI(TAG, "hello acknowledged by hub");

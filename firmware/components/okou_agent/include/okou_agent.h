@@ -51,6 +51,12 @@ esp_err_t okou_agent_start(const okou_config_t *cfg);
 /* True while the hub WebSocket is up and our hello has been acknowledged. */
 bool okou_connected(void);
 
+/* Hand the device to the launcher for (re-)provisioning: sets the one-shot NVS flag okl/setup
+ * and reboots into the launcher, which keeps BLE / USB provisioning open and does not auto-start
+ * the app until it has reached the hub again. Apps with a display call this after showing setup
+ * instructions (e-paper keeps them visible). Does not return on success. */
+esp_err_t okou_enter_setup(void);
+
 /* ---- commands ---------------------------------------------------------------------- */
 typedef struct okou_out okou_out_t;
 /* argv[0] is the command name. Return 0 for success; non-zero makes the res ok:false with
