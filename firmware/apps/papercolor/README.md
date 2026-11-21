@@ -7,7 +7,7 @@ M5Unified / M5GFX 0.3.0 (official PaperColor board support).
 | Behaviour | How |
 |---|---|
 | Boot | green LED blinks 3 times, two-tone chime |
-| Power off | power-button click (or `poweroff confirm`): red LED blinks 3 times, low tone, `M5.Power.powerOff()` |
+| Power button | left to the PM1: double click powers off immediately in hardware (like pulling the battery, no LED). A single click gets a short beep. Remote `poweroff confirm` blinks red 3 times, plays a low tone and powers off |
 | Not online within 45 s, or offline for 2 min | e-paper shows Chrome URL `hub.c3p0.dev/ops/setup`, a QR code and the BLE name `okl-xxxxxx`, then `okou_enter_setup()` hands over to the launcher (BLE provisioning open; the app comes back after the next hub ack) |
 | Online | e-paper shows Okou's official avatar (`static.vm0.io` default agent avatar SVG, rendered unmodified) and the device name |
 

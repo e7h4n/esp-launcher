@@ -1,9 +1,9 @@
 // M5Stack PaperColor app for esp-launcher.
 //
 //  - boot: green LED blinks 3 times and a two-tone chime right away (no screen clear at boot)
-//  - power button double click (or remote "poweroff confirm"): red LED blinks 3 times, low tone,
-//    power off. The PM1's own double-click shutdown is disabled while the app runs so the app can
-//    blink first; it is re-enabled before handing over to the launcher or powering off.
+//  - power button: the PM1's own handling is left untouched (double click = immediate hardware
+//    power off, like pulling the battery). A single click is acknowledged with a short beep.
+//    Remote "poweroff confirm" blinks the red LED 3 times, plays a low tone and powers off.
 //  - not online within 45 s (or offline for 2 min): the 4" Spectra 6 e-paper shows how to
 //    provision (Chrome -> https://hub.c3p0.dev/ops/setup, BLE name okl-xxxxxx, QR code), then the
 //    app hands over to the launcher (okou_enter_setup); e-paper keeps the instructions visible
@@ -82,12 +82,19 @@ static void forget_screen()
     }
 }
 
-static void pm1_double_off(bool hardware_enabled)
+// papercolor-app 0.1.11 disabled the PM1 hardware double-click power-off (BTN_CFG_2 bit0). That
+// was wrong: the PM1's behaviour must not be overridden. Restore the default once if a device
+// still carries the change; never write the register otherwise.
+static void pm1_restore_double_off_default()
 {
-    bool ok = hardware_enabled ? M5.Power.M5pm1.bitOff(PM1_ADDR_REG_BTN_CFG_2, 0x01)
-                               : M5.Power.M5pm1.bitOn(PM1_ADDR_REG_BTN_CFG_2, 0x01);
-    ESP_LOGI(TAG, "PM1 hardware double-click power-off %s (%s)", hardware_enabled ? "enabled" : "disabled",
-             ok ? "ok" : "I2C error");
+    uint8_t v = M5.Power.M5pm1.readRegister8(PM1_ADDR_REG_BTN_CFG_2);
+    if (v & 0x01) {
+        bool ok = M5.Power.M5pm1.bitOff(PM1_ADDR_REG_BTN_CFG_2, 0x01);
+        ESP_LOGW(TAG, "PM1 double-click power-off was disabled by an older build: restored the default (%s)",
+                 ok ? "ok" : "I2C error");
+    } else {
+        ESP_LOGI(TAG, "PM1 double-click power-off: hardware default (enabled), untouched");
+    }
 }
 
 static void led_blink(uint8_t r, uint8_t g, uint8_t b, int times, int on_ms = 180, int off_ms = 180)
@@ -234,7 +241,6 @@ static void enter_setup(const char *why)
     ensure_screen(SCREEN_SETUP);
     led_blink(255, 120, 0, 2);
     refresh_poll(true); // the instructions must be on the panel before the handover
-    pm1_double_off(true); // the launcher does not handle the power key
     esp_err_t e = okou_enter_setup(); // reboots into the launcher on success
     ESP_LOGE(TAG, "okou_enter_setup failed: %s", esp_err_to_name(e));
 }
@@ -247,7 +253,6 @@ static void power_off(const char *why)
     led_blink(255, 0, 0, 3);
     wait_speaker();
     M5.delay(300); // let the event flush
-    pm1_double_off(true);
     M5.Power.powerOff();
 }
 
@@ -336,7 +341,7 @@ extern "C" void app_main(void)
     M5.Speaker.begin();
     led_blink(0, 200, 0, 3);
     boot_chime();
-    pm1_double_off(false); // the app handles double click: blink, then power off
+    pm1_restore_double_off_default();
 
     okou_cmd_register("beep", "play the boot chime", cmd_beep);
     okou_cmd_register("led", "led <r> <g> <b> [times]: blink the RGB LED", cmd_led);
@@ -350,11 +355,7 @@ extern "C" void app_main(void)
     for (;;) {
         M5.update();
         if (M5.BtnPWR.wasClicked()) {
-            if (M5.Power.M5pm1.wasPekDoubleClicked()) {
-                power_off("power button double click");
-            } else {
-                M5.Speaker.tone(2637, 60); // single click: acknowledge only
-            }
+            M5.Speaker.tone(2637, 60); // single click: acknowledge only; double click is the PM1's
         }
         okou_poll(0);
         refresh_poll(false);
