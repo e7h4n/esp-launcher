@@ -46,6 +46,12 @@ jobs:
         run: node scripts/setup-access.mjs >> "$GITHUB_ENV"
       - name: Deploy worker
         run: npx wrangler deploy --var "DEVICE_AUD:$DEVICE_AUD" --var "OPS_AUD:$OPS_AUD"
+      - name: Enrollment credential (Access service tokens edit only)
+        env:
+          HUB_ENROLL_CF_TOKEN: ${{ secrets.HUB_ENROLL_CF_TOKEN }}
+        run: |
+          if [ -z "$HUB_ENROLL_CF_TOKEN" ]; then echo "::warning::HUB_ENROLL_CF_TOKEN not set; /ops/enroll disabled"; exit 0; fi
+          printf '%s' "$HUB_ENROLL_CF_TOKEN" | npx wrangler secret put CF_ENROLL_TOKEN
       - name: Smoke test
         run: |
           for i in $(seq 1 20); do

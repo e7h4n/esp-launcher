@@ -43,9 +43,11 @@ async function ensure(name, path, policies) {
   return app.aud;
 }
 
-const devicePolicies = deviceIncl.length
-  ? [{ name: "esp devices", decision: "non_identity", include: deviceIncl, precedence: 1 }]
-  : [];
+// Devices: any valid service token of the account. The hub registry maps a token to a device and
+// rejects everything else, so tokens issued by /ops/enroll work immediately, without a redeploy.
+const devicePolicies = [
+  { name: "esp devices (registry-checked by the hub)", decision: "non_identity", include: [{ any_valid_service_token: {} }], precedence: 1 },
+];
 const opsPolicies = [];
 if (opsIncl.length) opsPolicies.push({ name: "esp operators (service)", decision: "non_identity", include: opsIncl, precedence: 1 });
 if (EMAILS.length)

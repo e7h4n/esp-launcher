@@ -193,7 +193,44 @@ async def main():
     await asyncio.sleep(2)
     st, j = await asyncio.to_thread(http, "GET", f"/ops/devices/{DEV}")
     record("device shows offline after disconnect", j.get("online") is False, f"online={j.get('online')}")
+    await enroll_lifecycle()
     print(f"==== {sum(ok for _, ok in results)}/{len(results)} passed in {time.time() - t0:.0f} s")
+
+
+async def enroll_lifecycle():
+    """/ops/enroll issues a fresh device token that works at once; DELETE revokes it."""
+    dev_id = f"e2e-enroll-{secrets.token_hex(3)}"
+    st, j = await asyncio.to_thread(http, "POST", "/ops/enroll", OPS, {"device_id": dev_id, "label": "e2e enroll"})
+    if st == 503:
+        record("enroll", True, "skipped: enrollment not configured on this hub")
+        return
+    tok = (j.get("token") or {}) if st == 200 else {}
+    record("enroll issues a device token", st == 200 and tok.get("id", "").endswith(".access") and tok.get("secret"),
+           f"HTTP {st} device={j.get('device_id')} expires={j.get('token_expires_at')}")
+    if st != 200:
+        return
+    st2, _ = await asyncio.to_thread(http, "POST", "/ops/enroll", OPS, {"device_id": dev_id})
+    record("enroll refuses an existing id without rotate", st2 == 409, f"HTTP {st2}")
+    acks, ok = [], False
+    for attempt in range(6):  # a brand-new service token can take a few seconds to propagate
+        try:
+            async with websockets.connect(f"wss://{HUB}/device/connect", additional_headers=hdr((tok["id"], tok["secret"])),
+                                          user_agent_header=UA, open_timeout=20) as ws:
+                await ws.send(json.dumps({"t": "hello", "proto": 1, "boot_id": "e2e00001", "role": "launcher",
+                                          "fw": {"name": "enroll-sim", "version": "0", "idf": "sim", "sha256": "0" * 64},
+                                          "partition": "launcher_a", "chip": "sim", "mac": "02:00:00:00:00:02",
+                                          "reset_reason": "ESP_RST_POWERON", "rolled_back": False,
+                                          "pending_install": None, "heap_free": 1, "uptime_ms": 1}))
+                m = json.loads(await asyncio.wait_for(ws.recv(), 10))
+                acks.append(m)
+                ok = m.get("t") == "ack"
+                break
+        except Exception as e:  # noqa: BLE001
+            acks.append(repr(e)[:80])
+            await asyncio.sleep(5)
+    record("enrolled token connects as the device", ok, f"attempts={len(acks)} last={acks[-1] if acks else None}")
+    st3, j3 = await asyncio.to_thread(http, "DELETE", f"/ops/devices/{dev_id}", OPS)
+    record("delete revokes the device token", st3 == 200 and j3.get("deleted") and j3.get("token_revoked"), f"HTTP {st3} {j3}")
 
 
 asyncio.run(main())

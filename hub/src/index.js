@@ -1,6 +1,7 @@
 // esp-launcher hub: Cloudflare Worker + Durable Objects. Contract: docs/protocol.md
 import { DurableObject } from "cloudflare:workers";
 import { verifyAccessJwt } from "./access.js";
+import SETUP_HTML from "./setup.html";
 
 const RETENTION_MS = 7 * 24 * 3600 * 1000;
 const RETENTION_ITEMS = 200000;
@@ -64,6 +65,21 @@ export default {
     if (parts[0] === "ops") {
       const who = await authenticate(request, env, "ops");
       if (!who) return err(403, "operator authentication required");
+      if (parts[1] === "setup" && parts.length === 2 && request.method === "GET") {
+        return new Response(SETUP_HTML, {
+          headers: {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "no-store",
+            "content-security-policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
+          },
+        });
+      }
+      if (parts[1] === "enroll" && parts.length === 2 && request.method === "POST") {
+        return enroll(request, env, url, who);
+      }
+      if (parts[1] === "whoami" && parts.length === 2) {
+        return json({ type: who.type, email: who.email || null, client_id: who.clientId || null });
+      }
       if (parts[1] !== "devices") return err(404, "not found");
       const id = parts[2];
       if (!id) {
@@ -78,7 +94,16 @@ export default {
         return json({ devices });
       }
       if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(id)) return err(400, "invalid device id");
-      if (parts.length === 3 && (request.method === "PUT" || request.method === "DELETE")) {
+      if (parts.length === 3 && request.method === "DELETE") {
+        const entry = await (await registry(env).fetch(`https://r/devices/${id}`)).json();
+        let revoked = false;
+        if (entry.token_uuid && env.CF_ENROLL_TOKEN) {
+          revoked = (await cfApi(env, "DELETE", `/access/service_tokens/${entry.token_uuid}`)).ok;
+        }
+        await registry(env).fetch(new Request(`https://r/devices/${id}`, { method: "DELETE" }));
+        return json({ id, deleted: !!entry.id, token_revoked: revoked });
+      }
+      if (parts.length === 3 && request.method === "PUT") {
         return registry(env).fetch(new Request(`https://r/devices/${id}`, request));
       }
       const entry = await (await registry(env).fetch(`https://r/devices/${id}`)).json();
@@ -97,6 +122,65 @@ export default {
   },
 };
 
+// ---------------------------------------------------------------- enrollment
+// The hub creates one Cloudflare Access service token per device (CF_ENROLL_TOKEN only has
+// "Access: Service Tokens Edit"), registers the device, and returns the credentials once so the
+// setup page can hand them to the device over BLE. The device Access app admits any valid service
+// token of the account; the registry below decides which ones are devices.
+
+async function cfApi(env, method, path, body) {
+  const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${env.ACCOUNT_ID}${path}`, {
+    method,
+    headers: { Authorization: `Bearer ${env.CF_ENROLL_TOKEN}`, "content-type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const j = await r.json().catch(() => ({}));
+  return { ok: r.ok && j.success, status: r.status, result: j.result, errors: j.errors };
+}
+
+async function enroll(request, env, url, who) {
+  if (!env.CF_ENROLL_TOKEN || !env.ACCOUNT_ID) return err(503, "enrollment is not configured on this hub");
+  let b;
+  try {
+    b = await request.json();
+  } catch {
+    return err(400, "invalid json");
+  }
+  const id = String(b.device_id || "").toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(id)) return err(400, "device_id: lowercase letters, digits and dashes");
+  const reg = registry(env);
+  const existing = await (await reg.fetch(`https://r/devices/${id}`)).json();
+  if (existing.id && !b.rotate) return err(409, `device ${id} already exists; pass rotate:true to issue a new token`);
+  const created = await cfApi(env, "POST", "/access/service_tokens", { name: `esp-dev-${id}`, duration: "8760h" });
+  if (!created.ok) return err(502, `creating the service token failed: ${JSON.stringify(created.errors)}`);
+  const t = created.result;
+  const put = await reg.fetch(
+    new Request(`https://r/devices/${id}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        client_id: t.client_id,
+        label: b.label || existing.label || id,
+        token_expires_at: t.expires_at || null,
+        token_uuid: t.id,
+        writes_require_human: !!(b.writes_require_human ?? existing.writes_require_human),
+        enrolled_by: who.email || who.clientId || null,
+      }),
+    }),
+  );
+  if (!put.ok) {
+    await cfApi(env, "DELETE", `/access/service_tokens/${t.id}`);
+    return err(500, `registering the device failed: ${await put.text()}`);
+  }
+  if (existing.token_uuid) await cfApi(env, "DELETE", `/access/service_tokens/${existing.token_uuid}`);
+  return json({
+    device_id: id,
+    hub: url.host,
+    token: { id: t.client_id, secret: t.client_secret },
+    token_expires_at: t.expires_at || null,
+    rotated: !!existing.id,
+  });
+}
+
 // ---------------------------------------------------------------- registry
 
 export class Registry extends DurableObject {
@@ -106,6 +190,9 @@ export class Registry extends DurableObject {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS devices (
       id TEXT PRIMARY KEY, client_id TEXT UNIQUE NOT NULL, label TEXT,
       token_expires_at TEXT, writes_require_human INTEGER DEFAULT 0, created_at INTEGER)`);
+    const cols = this.sql.exec("PRAGMA table_info(devices)").toArray().map((c) => c.name);
+    if (!cols.includes("token_uuid")) this.sql.exec("ALTER TABLE devices ADD COLUMN token_uuid TEXT");
+    if (!cols.includes("enrolled_by")) this.sql.exec("ALTER TABLE devices ADD COLUMN enrolled_by TEXT");
   }
   row(r) {
     return r && { ...r, writes_require_human: !!r.writes_require_human };
@@ -140,11 +227,13 @@ export class Registry extends DurableObject {
         const clash = this.sql.exec("SELECT id FROM devices WHERE client_id = ? AND id != ?", b.client_id, id).toArray()[0];
         if (clash) return err(409, `client_id already bound to ${clash.id}`);
         this.sql.exec(
-          `INSERT INTO devices (id, client_id, label, token_expires_at, writes_require_human, created_at)
-           VALUES (?, ?, ?, ?, ?, ?)
+          `INSERT INTO devices (id, client_id, label, token_expires_at, writes_require_human, created_at, token_uuid, enrolled_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET client_id = excluded.client_id, label = excluded.label,
-             token_expires_at = excluded.token_expires_at, writes_require_human = excluded.writes_require_human`,
+             token_expires_at = excluded.token_expires_at, writes_require_human = excluded.writes_require_human,
+             token_uuid = excluded.token_uuid, enrolled_by = excluded.enrolled_by`,
           id, b.client_id, b.label || id, b.token_expires_at || null, b.writes_require_human ? 1 : 0, Date.now(),
+          b.token_uuid || null, b.enrolled_by || null,
         );
         return json(this.row(this.sql.exec("SELECT * FROM devices WHERE id = ?", id).toArray()[0]));
       }

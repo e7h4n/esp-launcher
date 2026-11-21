@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>esp-launcher 配网</title>
+<style>
+  :root { --fg:#1d1d1f; --muted:#6e6e73; --line:#e5e5ea; --ok:#1a7f37; --bad:#c62828; --accent:#0a66ff; }
+  * { box-sizing: border-box; }
+  body { font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; color: var(--fg);
+         margin: 0; background: #f6f6f8; }
+  main { max-width: 560px; margin: 32px auto; padding: 0 16px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  section { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; margin-bottom: 14px; }
+  section h2 { font-size: 15px; margin: 0 0 10px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  input { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; }
+  input:focus { outline: 2px solid #cfe0ff; border-color: var(--accent); }
+  button { font: inherit; padding: 9px 16px; border-radius: 8px; border: 0; background: var(--accent); color: #fff; cursor: pointer; }
+  button:disabled { background: #b8c7e6; cursor: default; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .pill { font-size: 13px; padding: 2px 10px; border-radius: 99px; background: #eef1f6; color: var(--muted); }
+  .pill.ok { background: #e6f4ea; color: var(--ok); } .pill.bad { background: #fdecea; color: var(--bad); }
+  .steps { display: flex; gap: 6px; margin-top: 10px; }
+  .steps span { flex: 1; text-align: center; font-size: 13px; padding: 6px 0; border-radius: 8px; background: #f0f0f3; color: var(--muted); }
+  .steps span.on { background: #e8f0ff; color: var(--accent); } .steps span.done { background: #e6f4ea; color: var(--ok); }
+  .steps span.fail { background: #fdecea; color: var(--bad); }
+  pre { background: #f6f6f8; border-radius: 8px; padding: 10px; font-size: 12px; max-height: 220px; overflow: auto; margin: 10px 0 0; white-space: pre-wrap; }
+  .hint { font-size: 13px; color: var(--muted); margin: 8px 0 0; }
+  .hidden { display: none; }
+  .check { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); margin-top: 10px; }
+  .check input { width: auto; }
+</style>
+</head>
+<body>
+<main>
+  <h1>esp-launcher 设备配网</h1>
+  <p class="sub">刷好 launcher 的 ESP32 会以 <code>okl-xxxxxx</code> 广播蓝牙。这里通过蓝牙给它写入 Wi-Fi 和设备凭据，连上 hub 后即可在 Okou 远程升级。</p>
+
+  <section>
+    <h2>1. 连接设备</h2>
+    <div class="row">
+      <button id="connect">搜索并连接</button>
+      <span id="bleState" class="pill">未连接</span>
+    </div>
+    <p class="hint" id="support"></p>
+  </section>
+
+  <section>
+    <h2>2. 设备与网络</h2>
+    <label for="deviceId">设备 ID（小写字母、数字、短横线）</label>
+    <input id="deviceId" placeholder="例如 paper-color" autocomplete="off">
+    <label for="label">名称（可选）</label>
+    <input id="label" placeholder="例如 Paper Color 测试板" autocomplete="off">
+    <label for="ssid">Wi-Fi 名称（2.4 GHz）</label>
+    <input id="ssid" autocomplete="off">
+    <label for="pass">Wi-Fi 密码（开放网络留空）</label>
+    <input id="pass" type="password" autocomplete="off">
+    <div id="manual" class="hidden">
+      <label for="cid">设备凭据 Client ID（手动模式）</label>
+      <input id="cid" autocomplete="off">
+      <label for="csec">设备凭据 Client Secret（手动模式）</label>
+      <input id="csec" type="password" autocomplete="off">
+      <label for="hub">Hub 地址</label>
+      <input id="hub" value="hub.c3p0.dev" autocomplete="off">
+    </div>
+    <label class="check"><input type="checkbox" id="rotate"> 设备 ID 已存在时重新签发凭据（旧凭据作废）</label>
+  </section>
+
+  <section>
+    <h2>3. 写入并上线</h2>
+    <div class="row">
+      <button id="go" disabled>注册并写入设备</button>
+      <span id="who" class="pill"></span>
+    </div>
+    <div class="steps">
+      <span id="s-enroll">注册</span><span id="s-write">写入</span><span id="s-wifi">Wi-Fi</span><span id="s-hub">Hub</span><span id="s-online">在线</span>
+    </div>
+    <pre id="log"></pre>
+  </section>
+</main>
+<script>
+"use strict";
+const SVC = "6f6b6f75-0001-4c61-756e-636865720000";
+const CHR = "6f6b6f75-0002-4c61-756e-636865720000";
+const $ = (id) => document.getElementById(id);
+const onHub = location.protocol === "https:" && location.pathname.startsWith("/ops/");
+let chr = null, dev = null, waiters = [];
+
+function log(msg) {
+  const t = new Date().toLocaleTimeString();
+  $("log").textContent += `[${t}] ${msg}\n`;
+  $("log").scrollTop = 1e9;
+}
+function step(id, state) {
+  const el = $("s-" + id);
+  el.className = state || "";
+}
+function pill(el, text, cls) { el.textContent = text; el.className = "pill" + (cls ? " " + cls : ""); }
+function ready() { $("go").disabled = !(chr && $("deviceId").value && $("ssid").value); }
+["deviceId", "ssid"].forEach((id) => $(id).addEventListener("input", ready));
+
+if (!navigator.bluetooth) {
+  $("support").textContent = "当前浏览器不支持 Web Bluetooth。请用桌面版或 Android 版 Chrome / Edge；iPhone 可用 Bluefy 浏览器。";
+  $("connect").disabled = true;
+} else {
+  $("support").textContent = "浏览器会弹出设备列表，选择 okl- 开头的设备。设备未配网、或长按 BOOT 键 3 秒后才会广播。";
+}
+
+if (onHub) {
+  fetch("/ops/whoami", { credentials: "same-origin" }).then((r) => r.json()).then((w) => {
+    pill($("who"), w.email ? `已登录 ${w.email}` : w.type, "ok");
+  }).catch(() => pill($("who"), "未登录 hub", "bad"));
+} else {
+  $("manual").classList.remove("hidden");
+  pill($("who"), "手动模式", "");
+}
+
+function onNotify(ev) {
+  const text = new TextDecoder().decode(ev.target.value);
+  let m;
+  try { m = JSON.parse(text); } catch { log("设备: " + text); return; }
+  if ("ok" in m) log(m.ok ? "设备已保存配置" : "设备拒绝: " + m.error);
+  if (m.state) log(`设备状态: ${m.state}${m.detail ? " (" + m.detail + ")" : ""}`);
+  waiters.forEach((w) => w(m));
+}
+function waitFor(pred, ms) {
+  return new Promise((resolve, reject) => {
+    const w = (m) => { if (pred(m)) { waiters = waiters.filter((x) => x !== w); clearTimeout(t); resolve(m); } };
+    const t = setTimeout(() => { waiters = waiters.filter((x) => x !== w); reject(new Error("timeout")); }, ms);
+    waiters.push(w);
+  });
+}
+
+$("connect").onclick = async () => {
+  try {
+    dev = await navigator.bluetooth.requestDevice({ filters: [{ namePrefix: "okl-" }], optionalServices: [SVC] });
+    pill($("bleState"), "连接中…");
+    dev.addEventListener("gattserverdisconnected", () => { chr = null; pill($("bleState"), "已断开", "bad"); ready(); });
+    const server = await dev.gatt.connect();
+    const svc = await server.getPrimaryService(SVC);
+    chr = await svc.getCharacteristic(CHR);
+    await chr.startNotifications();
+    chr.addEventListener("characteristicvaluechanged", onNotify);
+    pill($("bleState"), "已连接 " + dev.name, "ok");
+    if (!$("deviceId").value) $("deviceId").value = dev.name.toLowerCase();
+    log("已连接 " + dev.name);
+    ready();
+  } catch (e) {
+    pill($("bleState"), "连接失败", "bad");
+    log("连接失败: " + e.message);
+  }
+};
+
+async function writeLine(text) {
+  const bytes = new TextEncoder().encode(text + "\n");
+  for (let i = 0; i < bytes.length; i += 100) {
+    const part = bytes.slice(i, i + 100);
+    if (chr.writeValueWithResponse) await chr.writeValueWithResponse(part);
+    else await chr.writeValue(part);
+  }
+}
+
+$("go").onclick = async () => {
+  $("go").disabled = true;
+  ["enroll", "write", "wifi", "hub", "online"].forEach((s) => step(s, ""));
+  const id = $("deviceId").value.trim().toLowerCase();
+  let token, hub;
+  try {
+    step("enroll", "on");
+    if (onHub) {
+      const r = await fetch("/ops/enroll", {
+        method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ device_id: id, label: $("label").value.trim() || undefined, rotate: $("rotate").checked }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
+      token = j.token; hub = j.hub;
+      log(`hub 已注册 ${j.device_id}${j.rotated ? "（已重新签发凭据）" : ""}，凭据有效期至 ${j.token_expires_at || "?"}`);
+    } else {
+      token = { id: $("cid").value.trim(), secret: $("csec").value.trim() };
+      hub = $("hub").value.trim();
+      if (!token.id || !token.secret) throw new Error("手动模式需要填写 Client ID 和 Secret");
+    }
+    step("enroll", "done");
+
+    step("write", "on");
+    const payload = { wifi: { ssid: $("ssid").value, pass: $("pass").value }, hub, token, name: id };
+    const saved = waitFor((m) => "ok" in m, 10000);
+    await writeLine(JSON.stringify(payload));
+    token = null; payload.token = null;
+    const res = await saved;
+    if (!res.ok) throw new Error("设备拒绝配置: " + res.error);
+    step("write", "done");
+
+    step("wifi", "on");
+    for (;;) {
+      const m = await waitFor((x) => x.state, 90000);
+      if (m.state === "hub") { step("wifi", "done"); step("hub", "on"); }
+      if (m.state === "online") { step("wifi", "done"); step("hub", "done"); step("online", "done"); break; }
+      if (m.state === "error") { throw new Error(m.detail || "设备报告错误"); }
+    }
+    log(`设备已上线。现在可以在 Okou 里远程管理 ${id}。`);
+  } catch (e) {
+    ["enroll", "write", "wifi", "hub", "online"].forEach((s) => { if ($("s-" + s).className === "on") step(s, "fail"); });
+    log("失败: " + e.message);
+  } finally {
+    ready();
+  }
+};
+</script>
+</body>
+</html>

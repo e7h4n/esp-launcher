@@ -6,9 +6,16 @@ preview_urls = false
 
 routes = [{ pattern = "hub.c3p0.dev", custom_domain = true }]
 
+# The BLE setup page is bundled as text and served at /ops/setup.
+[[rules]]
+type = "Text"
+globs = ["**/*.html"]
+fallthrough = true
+
 [vars]
 # Cloudflare Access team domain and application audience tags (non-secret).
 ACCESS_TEAM = "e7h4n-investments-pages.cloudflareaccess.com"
+ACCOUNT_ID = "e630c3085e396154f7333b9b61f78226"
 DEVICE_AUD = ""
 OPS_AUD = ""
 
