@@ -22,7 +22,9 @@ operator (Okou, human)        --HTTPS> Cloudflare Access /ops/*    --> Worker --
    (`bootloader`, `partition-table`, `ota_data_initial`, `esp-launcher` for `esp32s3-generic`).
    An unprovisioned launcher stays in setup mode and advertises BLE as `okl-xxxxxx`.
 2. Open **https://hub.c3p0.dev/ops/setup** in desktop or Android Chrome (Access login), connect
-   to the device, enter a device ID and Wi-Fi, press "注册并写入设备". The hub issues a per-device
+   to the device, pick a network from the device's scan (or type a hidden SSID), enter a device
+   ID, press "注册并写入设备". For an enrolled device that only needs another network, tick
+   "只添加 Wi-Fi". An online device opens BLE for 2 min after a 3 s BOOT-button press. The hub issues a per-device
    Access service token, registers the device and the page writes Wi-Fi + token over BLE, then
    shows wifi → hub → online.
 3. From then on Okou manages the device through the hub (`/ops/devices/<id>`): logs, commands,
@@ -61,6 +63,12 @@ operator (Okou, human)        --HTTPS> Cloudflare Access /ops/*    --> Worker --
   launcher only; provisioned from https://hub.c3p0.dev/ops/setup in desktop Chrome over Web
   Bluetooth (hub-issued device token, new Wi-Fi network); online in seconds; then the app was
   installed remotely from Okou and validated.
-- Not yet on hardware: M5Stack StopWatch board bring-up.
+- **Wi-Fi manager on hardware (2026-11-22, fw 0.1.14, `okl-c17d24`):** device-side scan (5
+  networks with signal, security and channel), adding a hidden network without dropping the
+  current connection, visible saved network preferred after reboot (online in ~6 s, moved to the
+  front), forgetting a network; launcher self-update and app update over the hub on the new
+  network.
+- Not yet on hardware: connecting to an actual hidden network, the setup page's BLE scan list,
+  M5Stack StopWatch board bring-up.
 
 MIT licensed.
