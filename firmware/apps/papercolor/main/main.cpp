@@ -12,6 +12,8 @@
 // SPDX-License-Identifier: MIT
 #include <M5Unified.h>
 #include <string.h>
+#include <math.h>
+#include <stdlib.h>
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_timer.h"
@@ -36,6 +38,98 @@ static char s_dev_name[40];
 
 static int64_t now_us() { return esp_timer_get_time(); }
 
+// ---- battery (top-right of every screen) --------------------------------------------------
+// Same source, curve, colours and 60 s cadence as the factory firmware's battery widget
+// (paper_color web UI: GET /api/battery every 60 s, batteryPercentFromMV, low <= 25, crit <= 10).
+// The Spectra 6 panel only does ~20 s full refreshes, so a sample does not redraw by itself: the
+// screen is redrawn when the shown value is 10 points off, a threshold or USB power changes
+// (battery-driven redraws at most every 10 min, except falling to critical).
+static const int64_t BATT_SAMPLE_US = 60LL * 1000000;
+static const int64_t BATT_MIN_REDRAW_US = 10LL * 60 * 1000000;
+static int s_batt_pct = -1;          // current smoothed estimate
+static bool s_usb = false;           // VBUS present
+static int s_batt_drawn = -1;        // what the panel shows
+static bool s_usb_drawn = false;
+static int64_t s_batt_redraw_at = 0; // last battery-driven redraw
+static int s_mv_hist[3];
+static int s_mv_n = 0;
+
+static int battery_percent_from_mv(int mv)
+{
+    float v = mv / 1000.0f;
+    if (v >= 4.2f) return 100;
+    if (v <= 3.2f) return 0;
+    if (v >= 4.0f) return (int)lroundf(85 + (v - 4.0f) / 0.2f * 15);
+    if (v >= 3.8f) return (int)lroundf(50 + (v - 3.8f) / 0.2f * 35);
+    if (v >= 3.6f) return (int)lroundf(15 + (v - 3.6f) / 0.2f * 35);
+    if (v >= 3.4f) return (int)lroundf(5 + (v - 3.4f) / 0.2f * 10);
+    return (int)lroundf((v - 3.2f) / 0.2f * 5);
+}
+
+static int batt_class(int pct) { return pct < 0 ? -1 : pct <= 10 ? 2 : pct <= 25 ? 1 : 0; } // 2 crit, 1 low
+
+static void battery_sample()
+{
+    int mv = (int)M5.Power.getBatteryVoltage();
+    s_usb = (int)M5.Power.getVBUSVoltage() > 4000;
+    if (mv <= 0) {
+        return; // I2C read failed: keep the previous estimate
+    }
+    s_mv_hist[s_mv_n % 3] = mv;
+    s_mv_n++;
+    int a = s_mv_hist[0], b = s_mv_n > 1 ? s_mv_hist[1] : a, c = s_mv_n > 2 ? s_mv_hist[2] : a;
+    int med = a > b ? (b > c ? b : (a > c ? c : a)) : (a > c ? a : (b > c ? c : b)); // median of 3
+    s_batt_pct = battery_percent_from_mv(med);
+}
+
+static void draw_battery()
+{
+    auto &d = M5.Display;
+    const int w = 44, h = 22, x = d.width() - w - 16, y = 14;
+    int pct = s_batt_pct < 0 ? 0 : s_batt_pct;
+    int cls = batt_class(s_batt_pct);
+    uint32_t fill = cls == 2 ? TFT_RED : cls == 1 ? TFT_YELLOW : TFT_GREEN;
+    d.drawRect(x, y, w, h, TFT_BLACK);
+    d.drawRect(x + 1, y + 1, w - 2, h - 2, TFT_BLACK);
+    d.fillRect(x + w, y + 6, 4, h - 12, TFT_BLACK); // terminal nub
+    int fw = (w - 6) * pct / 100;
+    if (fw > 0) {
+        d.fillRect(x + 3, y + 3, fw, h - 6, fill);
+    }
+    char txt[8];
+    snprintf(txt, sizeof(txt), s_batt_pct < 0 ? "--%%" : "%d%%", pct);
+    d.setFont(&fonts::FreeSansBold12pt7b);
+    d.setTextColor(TFT_BLACK, TFT_WHITE);
+    d.setTextDatum(textdatum_t::middle_right);
+    int tx = x - 8;
+    d.drawString(txt, tx, y + h / 2 + 1);
+    if (s_usb) { // USB power: small bolt left of the percentage
+        int bx = tx - d.textWidth(txt) - 18, by = y + 1;
+        d.fillTriangle(bx + 8, by, bx, by + 12, bx + 7, by + 12, TFT_BLACK);
+        d.fillTriangle(bx + 5, by + 9, bx + 12, by + 9, bx + 4, by + 21, TFT_BLACK);
+    }
+    s_batt_drawn = s_batt_pct;
+    s_usb_drawn = s_usb;
+}
+
+static bool battery_needs_redraw(int64_t t)
+{
+    if (s_batt_pct < 0) {
+        return false;
+    }
+    bool usb_changed = s_usb != s_usb_drawn;
+    bool to_crit = batt_class(s_batt_pct) == 2 && batt_class(s_batt_drawn) != 2;
+    bool changed = usb_changed || batt_class(s_batt_pct) != batt_class(s_batt_drawn) ||
+                   s_batt_drawn < 0 || abs(s_batt_pct - s_batt_drawn) >= 10;
+    if (!changed) {
+        return false;
+    }
+    if (to_crit || s_batt_redraw_at == 0) {
+        return true;
+    }
+    return t - s_batt_redraw_at >= (usb_changed ? 60LL * 1000000 : BATT_MIN_REDRAW_US);
+}
+
 // ---- e-paper keeps its image without power: remember what is on it and skip identical redraws
 static const uint8_t PM1_ADDR_REG_BTN_CFG_2 = 0x4A; // bit0 DOUBLE_OFF_DIS (M5PM1 register map)
 static bool s_refreshing = false;
@@ -56,7 +150,16 @@ static bool screen_already_showing(screen_t sc)
         return false;
     }
     bool same = nvs_get_str(h, "screen", have, &len) == ESP_OK && strcmp(have, want) == 0;
+    int32_t batt = -1;
+    uint8_t usb = 0;
+    nvs_get_i32(h, "batt", &batt);
+    nvs_get_u8(h, "usb", &usb);
     nvs_close(h);
+    if (same) { // the panel's battery widget counts as "already showing" while it is still accurate
+        s_batt_drawn = batt;
+        s_usb_drawn = usb != 0;
+        same = !battery_needs_redraw(BATT_MIN_REDRAW_US);
+    }
     return same;
 }
 
@@ -67,6 +170,8 @@ static void remember_screen(screen_t sc)
     screen_sig(sc, sig, sizeof(sig));
     if (nvs_open("pcapp", NVS_READWRITE, &h) == ESP_OK) {
         nvs_set_str(h, "screen", sig);
+        nvs_set_i32(h, "batt", s_batt_drawn);
+        nvs_set_u8(h, "usb", s_usb_drawn ? 1 : 0);
         nvs_commit(h);
         nvs_close(h);
     }
@@ -136,6 +241,7 @@ static void draw_online()
     ESP_LOGI(TAG, "drawing online screen (avatar)");
     d.startWrite();
     d.fillScreen(TFT_WHITE);
+    draw_battery();
     size_t len = avatar_png_end - avatar_png_start;
     d.drawPng(avatar_png_start, len, (d.width() - 340) / 2, 70);
     d.setTextDatum(textdatum_t::top_center);
@@ -163,6 +269,7 @@ static void draw_setup()
     ESP_LOGI(TAG, "drawing setup screen");
     d.startWrite();
     d.fillScreen(TFT_WHITE);
+    draw_battery();
     d.setTextDatum(textdatum_t::top_center);
     d.setFont(&fonts::efontCN_24);
     d.setTextSize(2);
@@ -310,8 +417,10 @@ static int cmd_poweroff(int argc, char **argv, okou_out_t *out)
 
 static int cmd_battery(int argc, char **argv, okou_out_t *out)
 {
-    okou_outf(out, "level %d%% voltage %d mV vbus %d mV", (int)M5.Power.getBatteryLevel(), (int)M5.Power.getBatteryVoltage(),
-              (int)M5.Power.getVBUSVoltage());
+    battery_sample();
+    okou_outf(out, "battery %d%% (factory curve, median of last 3) shown %d%% usb %s | raw %d mV vbus %d mV | M5 level %d%%",
+              s_batt_pct, s_batt_drawn, s_usb ? "yes" : "no", (int)M5.Power.getBatteryVoltage(),
+              (int)M5.Power.getVBUSVoltage(), (int)M5.Power.getBatteryLevel());
     return 0;
 }
 
@@ -350,6 +459,13 @@ extern "C" void app_main(void)
     okou_cmd_register("poweroff", "poweroff confirm: blink and power off", cmd_poweroff);
     okou_cmd_register("battery", "battery level and voltages", cmd_battery);
 
+    for (int i = 0; i < 3; i++) {
+        battery_sample();
+        M5.delay(30);
+    }
+    ESP_LOGI(TAG, "battery %d%% (usb %s)", s_batt_pct, s_usb ? "yes" : "no");
+    int64_t batt_next = now_us() + BATT_SAMPLE_US;
+
     const int64_t t0 = now_us();
     int64_t offline_since = 0;
     for (;;) {
@@ -365,6 +481,17 @@ extern "C" void app_main(void)
 
         bool online = okou_connected();
         int64_t t = now_us();
+        if (t >= batt_next) {
+            batt_next = t + BATT_SAMPLE_US;
+            battery_sample();
+            okou_metric("battery_pct", s_batt_pct);
+            if (s_screen != SCREEN_NONE && !s_refreshing && battery_needs_redraw(t)) {
+                ESP_LOGI(TAG, "battery %d%% (shown %d%%, usb %s): redrawing", s_batt_pct, s_batt_drawn,
+                         s_usb ? "yes" : "no");
+                s_batt_redraw_at = t;
+                ensure_screen(s_screen, true);
+            }
+        }
         if (online) {
             offline_since = 0;
             ensure_screen(SCREEN_ONLINE); // 4: online -> avatar
