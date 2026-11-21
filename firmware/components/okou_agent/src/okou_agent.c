@@ -824,9 +824,60 @@ int okou_poll(uint32_t timeout_ms)
     return n;
 }
 
+/* Rollback visibility. The bootloader's "last invalid partition" survives only until the next
+ * esp_ota_set_boot_partition() rewrites otadata (the launcher auto-starting the app does exactly
+ * that, usually before it has reached the hub). So record it in NVS on the first boot that sees
+ * it, and report it as a `rollback` event from whichever role reaches the hub first. */
+static void record_rollback(void)
+{
+    const esp_partition_t *inv = esp_ota_get_last_invalid_partition();
+    char last[17] = "";
+    okou_nvs_get_str(OKOU_KEY_RB_LAST, last, sizeof(last));
+    if (!inv) {
+        if (last[0]) {
+            okou_nvs_erase(OKOU_KEY_RB_LAST); /* otadata moved on; a later rollback is new */
+        }
+        return;
+    }
+    if (strcmp(last, inv->label) == 0) {
+        return; /* same rollback, already recorded */
+    }
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "partition", inv->label);
+    cJSON_AddStringToObject(o, "kind", strcmp(inv->label, "app") == 0 ? "app" : "launcher");
+    cJSON_AddStringToObject(o, "returned_to", run ? run->label : "?");
+    cJSON_AddStringToObject(o, "reset_reason", okou_reset_reason_str());
+    cJSON_AddStringToObject(o, "detected_by", g_okou_cfg.role == OKOU_ROLE_LAUNCHER ? "launcher" : "app");
+    cJSON_AddStringToObject(o, "boot_id", s_boot_id);
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    if (js) {
+        okou_nvs_set_str(OKOU_KEY_RB, js);
+        okou_nvs_set_str(OKOU_KEY_RB_LAST, inv->label);
+        ESP_LOGW(TAG, "rollback detected: %s was invalidated, running %s", inv->label, run ? run->label : "?");
+        free(js);
+    }
+}
+
+static void report_rollback(void)
+{
+    char *js = okou_nvs_get_str_alloc(OKOU_KEY_RB);
+    if (!js) {
+        return;
+    }
+    cJSON *d = cJSON_Parse(js);
+    free(js);
+    if (d) {
+        okou_event_json("rollback", d); /* takes ownership */
+    }
+    okou_nvs_erase(OKOU_KEY_RB);
+}
+
 static void on_first_ack(void)
 {
     ESP_LOGI(TAG, "hello acknowledged by hub");
+    report_rollback();
     if (g_okou_cfg.role == OKOU_ROLE_APP && !g_okou_cfg.app_validates) {
         const esp_partition_t *run = esp_ota_get_running_partition();
         esp_ota_img_states_t st;
@@ -976,6 +1027,7 @@ esp_err_t okou_agent_start(const okou_config_t *cfg)
     ensure_queues();
     snprintf(s_boot_id, sizeof(s_boot_id), "%08" PRIx32, esp_random());
     s_rolled_back = esp_ota_get_last_invalid_partition() != NULL;
+    record_rollback();
 
     if (g_okou_cfg.role == OKOU_ROLE_APP && !g_okou_cfg.app_validates && CONFIG_OKOU_MAX_FAIL_BOOTS > 0) {
         uint8_t fb = okou_nvs_get_u8(OKOU_KEY_FAIL_BOOTS, 0);

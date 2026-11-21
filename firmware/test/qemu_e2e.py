@@ -10,6 +10,7 @@ Python stdlib only. Needs IDF_PATH (for nvs_partition_gen / esptool) and qemu-sy
 import argparse
 import base64
 import binascii
+import hashlib
 import json
 import os
 import re
@@ -339,6 +340,11 @@ class Runner:
                         and app_hello is None,
                         f"reboot app={rr.get('ok')} launcher hello rolled_back={it['data'].get('rolled_back') if it else None}"
                         f" app hello seen={app_hello is not None} app.state={parts.get('app', {}).get('state')}")
+            ev = self.hub.wait_for("event", lambda x: x["data"].get("name") == "rollback", 20, after=mark)
+            evd = (ev or {}).get("data", {}).get("data") or {}
+            self.record("rollback event reported", bool(ev) and evd.get("kind") == "app"
+                        and evd.get("partition") == "app" and evd.get("detected_by") == "launcher",
+                        f"event={json.dumps(evd)}")
 
             # 6c. fail_boots: valid app crashes before ack on 3 boots -> SDK boots the launcher
             mark = self.hub.mark()
@@ -378,6 +384,23 @@ class Runner:
         self.record("coredump op", r.get("ok") and d.get("present") is True and r2.get("data", {}).get("present")
                     is False, f"present={d.get('present')} summary={json.dumps(d.get('summary'))[:200]} "
                     f"erase ok={e1.get('ok')} after erase present={r2.get('data', {}).get('present')}")
+        # 7c. the core dump names the exact ELF and symbolizes to source
+        elf = os.path.join(os.path.dirname(a.app_bin), "hello-app.elf")
+        sm = d.get("summary") or {}
+        elf_sha = hashlib.sha256(open(elf, "rb").read()).hexdigest() if os.path.exists(elf) else ""
+        frames = []
+        if sm.get("backtrace"):
+            sj = os.path.join(self.out, "coredump-summary.json")
+            json.dump(sm, open(sj, "w"))
+            pr = subprocess.run([sys.executable, os.path.join(FW, "tools/symbolize.py"), "--summary-json", sj,
+                                 "--elf", elf, "--chip", "esp32", "--json"], capture_output=True, text=True)
+            if pr.returncode == 0:
+                frames = json.loads(pr.stdout).get("frames", [])
+        joined = " | ".join(frames)
+        dump_sha = sm.get("app_elf_sha256") or ""
+        sha_ok = len(dump_sha) >= 8 and elf_sha.startswith(dump_sha)  # prefix when RETRIEVE_LEN < 64
+        self.record("coredump symbolized", sha_ok and "abort" in joined and "hello_app/main/main.c" in joined,
+                    f"dump elf sha={dump_sha} matches built ELF={sha_ok} frames={joined[:300]}")
 
         # 8. bad signature is rejected
         badkey = os.path.join(self.out, "bad_priv.pem")

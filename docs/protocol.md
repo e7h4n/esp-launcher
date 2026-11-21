@@ -72,6 +72,17 @@ Each item is `[name, uptime_ms, number]`.
 {"t":"event","name":"install.done","data":{"sha256":"...","version":"0.2.0"}}
 ```
 
+Events emitted by the launcher/SDK themselves: `install.progress`, `install.done`,
+`install.failed`, `app.valid`, `launcher.valid`, and `rollback`:
+```json
+{"t":"event","name":"rollback","data":{"partition":"launcher_a","kind":"launcher",
+ "returned_to":"launcher_b","reset_reason":"ESP_RST_USB","detected_by":"launcher","boot_id":"9f1c2a7e"}}
+```
+The bootloader's record of an invalidated image is lost as soon as the next
+`esp_ota_set_boot_partition()` rewrites otadata (for example the launcher auto-starting the app
+before it reached the hub). So the first boot that sees it stores it in NVS (`okl/rb`), and
+whichever role reaches the hub first reports it once, then deletes it.
+
 `res` (answer to a hub request):
 ```json
 {"t":"res","id":"r-17","ok":true,"data":{}}
@@ -187,8 +198,13 @@ the path used during the first USB flash.
 - `sig = base64(DER(ECDSA_sign(SHA256(bin))))`, produced with
   `openssl dgst -sha256 -sign key.pem -out x.sig x.bin`.
 - The public key PEM lives in `firmware/keys/release_pub.pem` and is embedded in the launcher.
-- CI publishes for each build: `<name>-<version>-<chip>.bin`, `.sig` (base64 text), and
-  `manifest.json` `{name, version, chip, role, size, sha256, sig}`.
+- Versions are `<major.minor from firmware/version.txt>.<CI run number>` (local builds:
+  `<major.minor>.0-dev`); every push to main publishes its own release `fw-v<version>`.
+- CI publishes for each build: `<name>-<version>-<chip>.bin`, `.sig` (base64 text), `.elf`
+  (symbols) and `manifest.json` `{name, version, chip, role, size, sha256, sig, elf_sha256}`.
+- `elf_sha256` equals the `app_elf_sha256` in the app descriptor and in core dump summaries
+  (`CONFIG_APP_RETRIEVE_LEN_ELF_SHA=64`), so `firmware/tools/symbolize.py --device <id>` finds
+  the exact ELF of a crash in the releases and prints the backtrace as source lines.
 
 ## Operator API (hub, `/ops/*`)
 

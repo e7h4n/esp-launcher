@@ -33,6 +33,9 @@ jobs:
           . "$IDF_PATH/export.sh"
           cd firmware
           V=${{ matrix.variant }} T=${{ matrix.target }}
+          # <major.minor from version.txt>.<workflow run number>: every CI build has its own version.
+          VERSION="$(tr -d ' \n\r' < version.txt).${{ github.run_number }}"
+          echo "firmware version $VERSION"
           L_DEF=() A_DEF=()
           if [ "$V" = "esp32s3-generic" ]; then
             L_DEF=("-DSDKCONFIG_DEFAULTS=../sdkconfig.common;sdkconfig.defaults;../sdkconfig.s3generic")
@@ -41,12 +44,13 @@ jobs:
             L_DEF=("-DSDKCONFIG_DEFAULTS=../sdkconfig.common;sdkconfig.defaults;../sdkconfig.qemu")
             A_DEF=("-DSDKCONFIG_DEFAULTS=../../sdkconfig.common;sdkconfig.defaults;../../sdkconfig.qemu")
           fi
-          (cd launcher && idf.py -B "build/$V" -DIDF_TARGET="$T" -DSDKCONFIG="build/$V/sdkconfig" "${L_DEF[@]}" build)
-          (cd examples/hello_app && idf.py -B "build/$V" -DIDF_TARGET="$T" -DSDKCONFIG="build/$V/sdkconfig" "${A_DEF[@]}" build)
+          (cd launcher && idf.py -B "build/$V" -DIDF_TARGET="$T" -DSDKCONFIG="build/$V/sdkconfig" -DPROJECT_VER="$VERSION" "${L_DEF[@]}" build)
+          (cd examples/hello_app && idf.py -B "build/$V" -DIDF_TARGET="$T" -DSDKCONFIG="build/$V/sdkconfig" -DPROJECT_VER="$VERSION" "${A_DEF[@]}" build)
           mkdir -p "$GITHUB_WORKSPACE/out/$V"
           cp launcher/build/$V/esp-launcher.bin launcher/build/$V/bootloader/bootloader.bin \
              launcher/build/$V/partition_table/partition-table.bin launcher/build/$V/ota_data_initial.bin \
-             launcher/build/$V/flash_args examples/hello_app/build/$V/hello-app.bin "$GITHUB_WORKSPACE/out/$V/"
+             launcher/build/$V/flash_args examples/hello_app/build/$V/hello-app.bin \
+             launcher/build/$V/esp-launcher.elf examples/hello_app/build/$V/hello-app.elf "$GITHUB_WORKSPACE/out/$V/"
           (cd launcher && idf.py -B "build/$V" size) | tee "$GITHUB_WORKSPACE/out/$V/size-launcher.txt"
           (cd examples/hello_app && idf.py -B "build/$V" size) | tee "$GITHUB_WORKSPACE/out/$V/size-hello_app.txt"
 
@@ -101,7 +105,7 @@ jobs:
           FIRMWARE_SIGNING_KEY: ${{ secrets.FIRMWARE_SIGNING_KEY }}
         run: |
           set -euo pipefail
-          VERSION=$(tr -d ' \n\r' < firmware/version.txt)
+          VERSION="$(tr -d ' \n\r' < firmware/version.txt).${{ github.run_number }}"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           mkdir -p dist
           KEY=
@@ -117,11 +121,13 @@ jobs:
           for chip in esp32s3 esp32s3-generic esp32; do
             a="artifacts/fw-$chip"
             if [ -n "$KEY" ]; then
-              firmware/tools/sign.sh "$a/esp-launcher.bin" "$KEY" esp-launcher "$VERSION" "$chip" launcher dist
-              firmware/tools/sign.sh "$a/hello-app.bin" "$KEY" hello-app "$VERSION" "$chip" app dist
+              firmware/tools/sign.sh "$a/esp-launcher.bin" "$KEY" esp-launcher "$VERSION" "$chip" launcher dist "$a/esp-launcher.elf"
+              firmware/tools/sign.sh "$a/hello-app.bin" "$KEY" hello-app "$VERSION" "$chip" app dist "$a/hello-app.elf"
             else
               cp "$a/esp-launcher.bin" "dist/esp-launcher-$VERSION-$chip.bin"
               cp "$a/hello-app.bin" "dist/hello-app-$VERSION-$chip.bin"
+              cp "$a/esp-launcher.elf" "dist/esp-launcher-$VERSION-$chip.elf"
+              cp "$a/hello-app.elf" "dist/hello-app-$VERSION-$chip.elf"
             fi
             # First-time USB flashing helpers (not OTA-installable, not signed).
             cp "$a/bootloader.bin" "dist/bootloader-$VERSION-$chip.bin"

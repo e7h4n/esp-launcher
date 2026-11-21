@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
 set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/../components")
-file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../version.txt" PROJECT_VER LIMIT_COUNT 1)
+# CI passes -DPROJECT_VER=<major.minor>.<run number>; local builds are "<major.minor>.0-dev".
+if(NOT DEFINED PROJECT_VER)
+    file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../version.txt" _okl_base LIMIT_COUNT 1)
+    set(PROJECT_VER "${_okl_base}.0-dev")
+endif()
 if(NOT DEFINED SDKCONFIG_DEFAULTS)
     set(SDKCONFIG_DEFAULTS "../sdkconfig.common;sdkconfig.defaults")
 endif()

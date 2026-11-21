@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Sign an esp-launcher firmware image (docs/protocol.md "Signing").
 #
-#   tools/sign.sh <image.bin> <private_key.pem> <name> <version> <chip> <role> [outdir]
+#   tools/sign.sh <image.bin> <private_key.pem> <name> <version> <chip> <role> [outdir] [image.elf]
 #
 # Writes into outdir (default: next to the image):
 #   <name>-<version>-<chip>.bin            copy of the image
 #   <name>-<version>-<chip>.sig            base64(DER(ECDSA P-256 over SHA-256(bin))), one line
-#   <name>-<version>-<chip>.manifest.json  {name, version, chip, role, size, sha256, sig}
+#   <name>-<version>-<chip>.manifest.json  {name, version, chip, role, size, sha256, sig, elf_sha256}
+#   <name>-<version>-<chip>.elf            the matching ELF (symbols for crash backtraces), if given
 #   manifest.json                          JSON array of every *.manifest.json in outdir
 set -euo pipefail
 
@@ -16,6 +17,7 @@ if [ $# -lt 6 ]; then
 fi
 bin=$1 key=$2 name=$3 version=$4 chip=$5 role=$6
 out=${7:-$(dirname "$bin")}
+elf=${8:-}
 case "$role" in app|launcher) ;; *) echo "role must be app or launcher" >&2; exit 2 ;; esac
 mkdir -p "$out"
 base="$name-$version-$chip"
@@ -35,8 +37,14 @@ sig=$(cat "$out/$base.sig")
 size=$(wc -c < "$dst" | tr -d ' ')
 sha=$(openssl dgst -sha256 -r "$dst" | cut -d' ' -f1)
 
-printf '{"name":"%s","version":"%s","chip":"%s","role":"%s","size":%s,"sha256":"%s","sig":"%s"}\n' \
-    "$name" "$version" "$chip" "$role" "$size" "$sha" "$sig" > "$out/$base.manifest.json"
+elf_sha=""
+if [ -n "$elf" ]; then
+    cp "$elf" "$out/$base.elf"
+    # Same value as esp_app_desc_t.app_elf_sha256 / the core dump summary's app_elf_sha256.
+    elf_sha=$(openssl dgst -sha256 -r "$elf" | cut -d' ' -f1)
+fi
+printf '{"name":"%s","version":"%s","chip":"%s","role":"%s","size":%s,"sha256":"%s","sig":"%s","elf_sha256":"%s"}\n' \
+    "$name" "$version" "$chip" "$role" "$size" "$sha" "$sig" "$elf_sha" > "$out/$base.manifest.json"
 
 # Combined index (one JSON array) for release pages / CI consumers.
 {
