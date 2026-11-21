@@ -1,0 +1,70 @@
+name: sign-app
+
+# Sign an app built by another repository's CI so esp-launcher devices accept it over the air.
+# The release key stays in this repository: only maintainers who can dispatch this workflow can
+# sign. The signed image is published as release app-<name>-<version> (never "Latest").
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "Source repository"
+        default: "e7h4n/coffee-watch"
+        required: true
+      run_id:
+        description: "Actions run id in the source repository"
+        required: true
+      artifact_prefix:
+        description: "Artifact name prefix (the artifact holds <...>.bin and its .elf)"
+        default: "coffee-watch-launcher-app-"
+        required: true
+      name:
+        description: "App name in the manifest"
+        default: "coffee-watch"
+        required: true
+      chip:
+        description: "Chip / variant label"
+        default: "esp32s3"
+        required: true
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download the source artifact
+        run: |
+          set -euo pipefail
+          mkdir -p src
+          gh run download "${{ inputs.run_id }}" -R "${{ inputs.repo }}" -p "${{ inputs.artifact_prefix }}*" -D src
+          find src -type f | sort
+      - name: Sign and publish
+        env:
+          FIRMWARE_SIGNING_KEY: ${{ secrets.FIRMWARE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          BIN=$(find src -name '*.bin' | head -1)
+          ELF=$(find src -name '*.elf' | head -1)
+          [ -n "$BIN" ] || { echo "no .bin in the artifact"; exit 1; }
+          # Version from the image's esp_app_desc_t (offset 0x20 + 16, 32 bytes).
+          VERSION=$(python3 -c "import sys; d=open(sys.argv[1],'rb').read(); print(d[0x30:0x50].split(b'\0')[0].decode().lstrip('v'))" "$BIN")
+          PROJECT=$(python3 -c "import sys; d=open(sys.argv[1],'rb').read(); print(d[0x50:0x70].split(b'\0')[0].decode())" "$BIN")
+          echo "image: project=$PROJECT version=$VERSION"
+          KEY="$RUNNER_TEMP/key.pem"
+          (umask 077; printf '%s\n' "$FIRMWARE_SIGNING_KEY" > "$KEY")
+          mkdir -p dist
+          firmware/tools/sign.sh "$BIN" "$KEY" "${{ inputs.name }}" "$VERSION" "${{ inputs.chip }}" app dist ${ELF:+"$ELF"}
+          rm -f "$KEY"
+          TAG="app-${{ inputs.name }}-v$VERSION"
+          NOTES="${{ inputs.name }} $VERSION ($PROJECT), built by ${{ inputs.repo }} run ${{ inputs.run_id }}, signed with the esp-launcher release key."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --title "${{ inputs.name }} $VERSION" --notes "$NOTES" --latest=false
+          fi
+          echo "published $TAG"
