@@ -29,6 +29,14 @@
   pre { background: #f6f6f8; border-radius: 8px; padding: 10px; font-size: 12px; max-height: 220px; overflow: auto; margin: 10px 0 0; white-space: pre-wrap; }
   .hint { font-size: 13px; color: var(--muted); margin: 8px 0 0; }
   .hidden { display: none; }
+  .aplist { border: 1px solid var(--line); border-radius: 8px; max-height: 220px; overflow: auto; margin-top: 6px; }
+  .ap { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; cursor: pointer; border-bottom: 1px solid #f0f0f3; font-size: 14px; }
+  .ap:last-child { border-bottom: 0; }
+  .ap:hover { background: #f5f8ff; }
+  .ap.sel { background: #e8f0ff; }
+  .ap .meta { color: var(--muted); font-size: 12px; white-space: nowrap; margin-left: 10px; }
+  .saved { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .linkbtn { background: none; color: var(--accent); padding: 0; font-size: 13px; }
   .check { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); margin-top: 10px; }
   .check input { width: auto; }
 </style>
@@ -53,8 +61,12 @@
     <input id="deviceId" placeholder="例如 paper-color" autocomplete="off">
     <label for="label">名称（可选）</label>
     <input id="label" placeholder="例如 Paper Color 测试板" autocomplete="off">
-    <label for="ssid">Wi-Fi 名称（2.4 GHz）</label>
-    <input id="ssid" autocomplete="off">
+    <label>Wi-Fi（2.4 GHz）<button class="linkbtn" id="rescan" disabled>重新扫描</button></label>
+    <div class="aplist" id="aplist"><div class="ap"><span>连接设备后自动扫描附近的 Wi-Fi</span></div></div>
+    <div class="saved" id="saved"></div>
+    <label class="check"><input type="checkbox" id="hiddenNet"> 隐藏网络（手动输入名称）</label>
+    <label for="ssid">Wi-Fi 名称</label>
+    <input id="ssid" autocomplete="off" placeholder="从上面的列表选择，或手动输入">
     <label for="pass">Wi-Fi 密码（开放网络留空）</label>
     <input id="pass" type="password" autocomplete="off">
     <div id="manual" class="hidden">
@@ -65,6 +77,7 @@
       <label for="hub">Hub 地址</label>
       <input id="hub" value="hub.c3p0.dev" autocomplete="off">
     </div>
+    <label class="check"><input type="checkbox" id="wifiOnly"> 只添加 Wi-Fi（设备已注册，不重新签发凭据）</label>
     <label class="check"><input type="checkbox" id="rotate"> 设备 ID 已存在时重新签发凭据（旧凭据作废）</label>
   </section>
 
@@ -87,6 +100,52 @@ const CHR = "6f6b6f75-0002-4c61-756e-636865720000";
 const $ = (id) => document.getElementById(id);
 const onHub = location.protocol === "https:" && location.pathname.startsWith("/ops/");
 let chr = null, dev = null, waiters = [];
+let scanResults = [], savedNets = [];
+const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function bars(r) { return r > -55 ? "▂▄▆█" : r > -67 ? "▂▄▆" : r > -78 ? "▂▄" : "▂"; }
+function renderAps() {
+  const box = $("aplist");
+  if (!scanResults.length) { box.innerHTML = '<div class="ap"><span>没有扫描到网络</span></div>'; return; }
+  box.innerHTML = scanResults.map((a, i) =>
+    `<div class="ap" data-i="${i}"><span>${esc(a.s)}</span><span class="meta">${a.a === "open" ? "开放" : "🔒 " + esc(a.a)} · ch${a.c} · ${bars(a.r)} ${a.r} dBm</span></div>`).join("");
+  box.querySelectorAll(".ap").forEach((el) => el.onclick = () => {
+    const a = scanResults[+el.dataset.i];
+    box.querySelectorAll(".ap").forEach((x) => x.classList.remove("sel"));
+    el.classList.add("sel");
+    $("hiddenNet").checked = false;
+    $("ssid").value = a.s;
+    $("pass").value = "";
+    $("pass").placeholder = a.a === "open" ? "开放网络，无需密码" : "";
+    if (a.a !== "open") $("pass").focus();
+    ready();
+  });
+}
+function renderSaved() {
+  $("saved").textContent = savedNets.length
+    ? "设备已保存：" + savedNets.map((n) => n.ssid + (n.current ? "（当前）" : "") + (n.hidden ? "（隐藏）" : "")).join("、")
+    : "设备还没有保存任何 Wi-Fi";
+}
+async function request(op, doneKey, ms) {
+  const done = waitFor((m) => m[doneKey] !== undefined, ms);
+  await writeLine(JSON.stringify({ op }));
+  return done;
+}
+async function scanNow() {
+  if (!chr) return;
+  $("rescan").disabled = true;
+  $("aplist").innerHTML = '<div class="ap"><span>正在扫描…</span></div>';
+  scanResults = [];
+  try {
+    const r = await request("scan", "scan", 25000);
+    log(r.scan === "done" ? `扫描到 ${r.n} 个网络` : "扫描失败，请重试");
+    renderAps();
+  } catch (e) { log("扫描超时: " + e.message); renderAps(); }
+  $("rescan").disabled = false;
+}
+async function loadSaved() {
+  savedNets = [];
+  try { await request("saved", "saved", 8000); renderSaved(); } catch (e) { log("读取已保存的 Wi-Fi 失败"); }
+}
 
 function log(msg) {
   const t = new Date().toLocaleTimeString();
@@ -121,6 +180,8 @@ function onNotify(ev) {
   const text = new TextDecoder().decode(ev.target.value);
   let m;
   try { m = JSON.parse(text); } catch { log("设备: " + text); return; }
+  if (m.ap) { scanResults.push(m.ap); return; }
+  if (m.saved_ap) { savedNets.push(m.saved_ap); }
   if ("ok" in m) log(m.ok ? "设备已保存配置" : "设备拒绝: " + m.error);
   if (m.state) log(`设备状态: ${m.state}${m.detail ? " (" + m.detail + ")" : ""}`);
   waiters.forEach((w) => w(m));
@@ -133,6 +194,7 @@ function waitFor(pred, ms) {
   });
 }
 
+$("rescan").onclick = (e) => { e.preventDefault(); scanNow(); };
 $("connect").onclick = async () => {
   try {
     dev = await navigator.bluetooth.requestDevice({ filters: [{ namePrefix: "okl-" }], optionalServices: [SVC] });
@@ -147,6 +209,9 @@ $("connect").onclick = async () => {
     if (!$("deviceId").value) $("deviceId").value = dev.name.toLowerCase();
     log("已连接 " + dev.name);
     ready();
+    $("rescan").disabled = false;
+    await loadSaved();
+    await scanNow();
   } catch (e) {
     pill($("bleState"), "连接失败", "bad");
     log("连接失败: " + e.message);
@@ -169,12 +234,16 @@ $("go").onclick = async () => {
   let token, hub;
   try {
     step("enroll", "on");
-    if (onHub) {
+    if ($("wifiOnly").checked) {
+      token = null; hub = null;
+      log("只添加 Wi-Fi，不重新注册");
+    } else if (onHub) {
       const r = await fetch("/ops/enroll", {
         method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" },
         body: JSON.stringify({ device_id: id, label: $("label").value.trim() || undefined, rotate: $("rotate").checked }),
       });
       const j = await r.json();
+      if (r.status === 409) throw new Error("这个设备 ID 已注册。只想换 Wi-Fi 请勾选“只添加 Wi-Fi”，要重新签发凭据请勾选下面那一项");
       if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
       token = j.token; hub = j.hub;
       log(`hub 已注册 ${j.device_id}${j.rotated ? "（已重新签发凭据）" : ""}，凭据有效期至 ${j.token_expires_at || "?"}`);
@@ -186,7 +255,8 @@ $("go").onclick = async () => {
     step("enroll", "done");
 
     step("write", "on");
-    const payload = { wifi: { ssid: $("ssid").value, pass: $("pass").value }, hub, token, name: id };
+    const payload = { wifi: { ssid: $("ssid").value.trim(), pass: $("pass").value, hidden: $("hiddenNet").checked } };
+    if (token) { payload.hub = hub; payload.token = token; payload.name = id; }
     const saved = waitFor((m) => "ok" in m, 10000);
     await writeLine(JSON.stringify(payload));
     token = null; payload.token = null;

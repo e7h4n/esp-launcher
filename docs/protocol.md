@@ -185,6 +185,23 @@ notifies `{"state":"wifi"|"hub"|"online"|"error","detail":"..."}`. BLE advertisi
 `okl-<last 3 MAC bytes hex>`. Provisioning is open only while the launcher has no hub
 connection or the user holds the BOOT button for 3 s.
 
+### Wi-Fi networks and scanning
+
+- The `wifi` object of a provisioning payload (`{"ssid","pass","hidden"}`) **adds** a network to
+  the saved list (NVS `okl/wifis`, up to 5, most recently used first); it never replaces the
+  others. `okl/ssid`/`okl/pass` mirror the first entry for older launchers. A payload may carry
+  only `wifi` (add a network to an already enrolled device).
+- Connect loop: scan, try saved networks that are visible (strongest first), then the rest,
+  including hidden ones (directed probe); back off up to 60 s; the network that works moves to
+  the front.
+- BLE requests (same characteristic, one JSON line each):
+  - `{"op":"scan"}` -> one notification per visible network `{"ap":{"s","r","a","c"}}`
+    (ssid, rssi, auth, channel; strongest first), then `{"scan":"done"|"failed","n":N}`.
+  - `{"op":"saved"}` -> `{"saved_ap":{"ssid","hidden","open","current"}}` per saved network
+    (never passwords), then `{"saved":"done","n":N}`.
+- Remote command `wifi [list | scan | add <ssid> [pass] [hidden] | forget <ssid>]` does the
+  same through the hub (passwords are never echoed).
+
 ### USB serial provisioning
 
 The launcher also reads its console (USB-Serial-JTAG on ESP32-S3, UART0 otherwise). A line

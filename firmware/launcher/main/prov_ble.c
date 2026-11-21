@@ -183,6 +183,55 @@ static void prov_task(void *arg)
         char *line = NULL;
         if (xQueueReceive(s_lines, &line, pdMS_TO_TICKS(250)) == pdTRUE) {
             char err[96] = "";
+            const char *op = prov_request_op(line);
+            if (op && strcmp(op, "scan") == 0) {
+                okou_ap_t *aps = calloc(20, sizeof(okou_ap_t));
+                int nap = aps ? okou_wifi_scan(aps, 20, 20000) : -1;
+                for (int i = 0; i < nap; i++) { /* one notification per network: fits the 185-byte MTU */
+                    cJSON *o = cJSON_CreateObject(), *ap = cJSON_AddObjectToObject(o, "ap");
+                    cJSON_AddStringToObject(ap, "s", aps[i].ssid);
+                    cJSON_AddNumberToObject(ap, "r", aps[i].rssi);
+                    cJSON_AddStringToObject(ap, "a", okou_wifi_auth_str(aps[i].auth));
+                    cJSON_AddNumberToObject(ap, "c", aps[i].channel);
+                    char *js = cJSON_PrintUnformatted(o);
+                    cJSON_Delete(o);
+                    if (js) {
+                        notify(js);
+                        free(js);
+                    }
+                    vTaskDelay(pdMS_TO_TICKS(15));
+                }
+                free(aps);
+                char msg[48];
+                snprintf(msg, sizeof(msg), "{\"scan\":\"%s\",\"n\":%d}", nap < 0 ? "failed" : "done", nap < 0 ? 0 : nap);
+                notify(msg);
+                free(line);
+                continue;
+            }
+            if (op && strcmp(op, "saved") == 0) {
+                cJSON *arr = cJSON_CreateArray(), *o;
+                okou_wifi_saved_json(arr);
+                int cnt = 0;
+                cJSON_ArrayForEach(o, arr)
+                {
+                    cJSON *w = cJSON_CreateObject();
+                    cJSON_AddItemReferenceToObject(w, "saved_ap", o);
+                    char *js = cJSON_PrintUnformatted(w);
+                    cJSON_Delete(w);
+                    if (js) {
+                        notify(js);
+                        free(js);
+                    }
+                    cnt++;
+                    vTaskDelay(pdMS_TO_TICKS(15));
+                }
+                cJSON_Delete(arr);
+                char msg[40];
+                snprintf(msg, sizeof(msg), "{\"saved\":\"done\",\"n\":%d}", cnt);
+                notify(msg);
+                free(line);
+                continue;
+            }
             if (prov_apply(line, err, sizeof(err))) {
                 ESP_LOGI(TAG, "provisioning data stored");
                 notify("{\"ok\":true}");

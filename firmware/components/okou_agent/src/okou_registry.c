@@ -14,6 +14,7 @@
 #include "nvs.h"
 #include "sdkconfig.h"
 #include "okou_priv.h"
+#include "okou_agent_ext.h"
 
 #define PARAM_NS "okp"
 #define MAX_ARGS 16
@@ -429,9 +430,56 @@ static int cmd_heap(int argc, char **argv, okou_out_t *out)
 static int cmd_wifi(int argc, char **argv, okou_out_t *out)
 {
     char buf[160];
-    okou_net_describe(buf, sizeof(buf));
-    okou_outf(out, "%s\n", buf);
-    return 0;
+    if (argc < 2) {
+        okou_net_describe(buf, sizeof(buf));
+        okou_outf(out, "%s\n", buf);
+        return 0;
+    }
+    if (strcmp(argv[1], "list") == 0) {
+        cJSON *arr = cJSON_CreateArray();
+        okou_wifi_saved_json(arr);
+        cJSON *o;
+        int i = 0;
+        cJSON_ArrayForEach(o, arr)
+        {
+            okou_outf(out, "%d. %s%s%s%s\n", ++i, cJSON_GetObjectItem(o, "ssid")->valuestring,
+                      cJSON_IsTrue(cJSON_GetObjectItem(o, "hidden")) ? " [hidden]" : "",
+                      cJSON_IsTrue(cJSON_GetObjectItem(o, "open")) ? " [open]" : "",
+                      cJSON_IsTrue(cJSON_GetObjectItem(o, "current")) ? " <- connected" : "");
+        }
+        cJSON_Delete(arr);
+        if (!i) {
+            okou_outf(out, "no saved networks\n");
+        }
+        return 0;
+    }
+    if (strcmp(argv[1], "scan") == 0) {
+        okou_ap_t aps[20];
+        int n = okou_wifi_scan(aps, 20, 20000);
+        if (n < 0) {
+            okou_outf(out, "scan failed (busy or not available)\n");
+            return 1;
+        }
+        for (int i = 0; i < n; i++) {
+            okou_outf(out, "%4d dBm  ch%-2u  %-9s  %s\n", aps[i].rssi, aps[i].channel, okou_wifi_auth_str(aps[i].auth),
+                      aps[i].ssid);
+        }
+        okou_outf(out, "%d networks\n", n);
+        return 0;
+    }
+    if (strcmp(argv[1], "add") == 0 && argc >= 3) {
+        bool hidden = argc >= 5 && strcmp(argv[4], "hidden") == 0;
+        esp_err_t e = okou_wifi_add(argv[2], argc >= 4 ? argv[3] : "", hidden);
+        okou_outf(out, e == ESP_OK ? "saved %s%s\n" : "failed to save %s%s\n", argv[2], hidden ? " (hidden)" : "");
+        return e == ESP_OK ? 0 : 1;
+    }
+    if (strcmp(argv[1], "forget") == 0 && argc >= 3) {
+        esp_err_t e = okou_wifi_forget(argv[2]);
+        okou_outf(out, e == ESP_OK ? "forgot %s\n" : "%s is not saved\n", argv[2]);
+        return e == ESP_OK ? 0 : 1;
+    }
+    okou_outf(out, "usage: wifi [list | scan | add <ssid> [pass] [hidden] | forget <ssid>]\n");
+    return 1;
 }
 
 static int cmd_logstat(int argc, char **argv, okou_out_t *out)
@@ -460,6 +508,6 @@ void okou_registry_builtin_cmds(void)
     builtin("help", "list commands", cmd_help);
     builtin("version", "firmware version and running partition", cmd_version);
     builtin("heap", "heap statistics", cmd_heap);
-    builtin("wifi", "network status (Wi-Fi or QEMU Ethernet)", cmd_wifi);
+    builtin("wifi", "wifi [list|scan|add <ssid> [pass] [hidden]|forget <ssid>]: status and saved networks", cmd_wifi);
     builtin("logstat", "log ring buffer: seq sent/acked, drops, usage", cmd_logstat);
 }

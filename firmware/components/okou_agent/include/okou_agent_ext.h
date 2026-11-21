@@ -23,6 +23,7 @@ extern "C" {
 #define OKOU_KEY_STAY        "stay"       /* u8: never auto-start the app */
 #define OKOU_KEY_FAIL_BOOTS  "fail_boots" /* u8: app boots without a hub ack */
 #define OKOU_KEY_HOLD        "hold"       /* u8: one-shot "stay in launcher on next boot" (extension) */
+#define OKOU_KEY_WIFIS       "wifis"      /* str: saved Wi-Fi networks, JSON, most recent first */
 #define OKOU_KEY_SETUP       "setup"      /* u8: one-shot "stay in the launcher until the hub acks" */
 #define OKOU_KEY_RB          "rb"         /* str: unreported rollback record (JSON) */
 #define OKOU_KEY_RB_LAST     "rb_last"    /* str: label of the invalid partition already recorded */
@@ -63,7 +64,26 @@ void okou_schedule_reboot(uint32_t delay_ms);
 /* Re-read okl/{hub,cid,csec,ssid,pass,name} and reconnect (used by BLE provisioning). */
 void okou_agent_reload_config(void);
 bool okou_net_has_ip(void);
-void okou_net_reconfigure(void); /* re-read okl/ssid+pass and reconnect Wi-Fi */
+void okou_net_reconfigure(void); /* re-read saved Wi-Fi networks and reconnect */
+
+/* ---- Wi-Fi networks (SDK-managed networking only) ---- */
+#define OKOU_WIFI_MAX 5
+typedef struct {
+    char ssid[33];
+    int8_t rssi;
+    uint8_t channel;
+    int auth; /* wifi_auth_mode_t */
+} okou_ap_t;
+/* Save (or move to the front) a network; up to OKOU_WIFI_MAX, oldest dropped. */
+esp_err_t okou_wifi_add(const char *ssid, const char *pass, bool hidden);
+esp_err_t okou_wifi_forget(const char *ssid);
+int okou_wifi_count(void);
+/* Appends {ssid, hidden, open, current} objects (no passwords). */
+void okou_wifi_saved_json(cJSON *arr);
+/* Blocking scan (~2-3 s), serialised with connection attempts; one entry per SSID, strongest first. */
+int okou_wifi_scan(okou_ap_t *out, int max, uint32_t timeout_ms);
+bool okou_wifi_current(char *ssid, size_t len);
+const char *okou_wifi_auth_str(int auth);
 bool okou_ws_connected(void); /* socket up (hello may not be acked yet) */
 
 /* NVS helpers (namespace okl). */

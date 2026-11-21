@@ -21,11 +21,6 @@ static volatile bool s_has_ip;
 static bool s_managed;
 static esp_netif_t *s_netif;
 static char s_ip[16] = "";
-static uint32_t s_wifi_backoff_ms = 1000;
-#if !CONFIG_OKOU_NET_OPENETH
-static bool s_have_creds;
-static esp_timer_handle_t s_retry_timer;
-#endif
 
 bool okou_net_has_ip(void)
 {
@@ -40,8 +35,12 @@ static void on_got_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
         s_netif = ev->esp_netif;
     }
     s_has_ip = true;
-    s_wifi_backoff_ms = 1000;
     ESP_LOGI(OKOU_TAG, "got ip %s", s_ip);
+#if !CONFIG_OKOU_NET_OPENETH
+    if (s_managed) {
+        okou_wifi_on_got_ip();
+    }
+#endif
 }
 
 static void on_lost_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
@@ -51,53 +50,14 @@ static void on_lost_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
 }
 
 #if !CONFIG_OKOU_NET_OPENETH
-static void retry_cb(void *arg)
-{
-    if (s_have_creds) {
-        esp_wifi_connect();
-    }
-}
-
 static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     if (id == WIFI_EVENT_STA_START) {
-        if (s_have_creds) {
-            esp_wifi_connect();
-        }
+        okou_wifi_on_started();
     } else if (id == WIFI_EVENT_STA_DISCONNECTED) {
         s_has_ip = false;
         s_ip[0] = '\0';
-        if (s_managed && s_have_creds) {
-            esp_timer_stop(s_retry_timer);
-            esp_timer_start_once(s_retry_timer, (uint64_t)s_wifi_backoff_ms * 1000);
-            if (s_wifi_backoff_ms < 30000) {
-                s_wifi_backoff_ms *= 2;
-            }
-        }
-    }
-}
-
-/* okl/ssid+pass win; otherwise keep whatever the Wi-Fi driver already has in NVS
- * (existing devices keep their Wi-Fi settings). */
-static void apply_wifi_config(void)
-{
-    wifi_config_t wc = {0};
-    char ssid[33] = {0}, pass[65] = {0};
-    if (okou_nvs_get_str("ssid", ssid, sizeof(ssid)) == ESP_OK && ssid[0]) {
-        okou_nvs_get_str("pass", pass, sizeof(pass));
-        strlcpy((char *)wc.sta.ssid, ssid, sizeof(wc.sta.ssid));
-        strlcpy((char *)wc.sta.password, pass, sizeof(wc.sta.password));
-        wc.sta.threshold.authmode = pass[0] ? WIFI_AUTH_WPA_PSK : WIFI_AUTH_OPEN;
-        wc.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
-        wc.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
-        esp_wifi_set_config(WIFI_IF_STA, &wc);
-        s_have_creds = true;
-    } else if (esp_wifi_get_config(WIFI_IF_STA, &wc) == ESP_OK && wc.sta.ssid[0]) {
-        ESP_LOGI(OKOU_TAG, "using Wi-Fi credentials stored by the driver (ssid %s)", (char *)wc.sta.ssid);
-        s_have_creds = true;
-    } else {
-        ESP_LOGW(OKOU_TAG, "no Wi-Fi credentials (provision over BLE from the launcher)");
-        s_have_creds = false;
+        okou_wifi_on_disconnected(((wifi_event_sta_disconnected_t *)data)->reason);
     }
 }
 #endif
@@ -105,14 +65,8 @@ static void apply_wifi_config(void)
 void okou_net_reconfigure(void)
 {
 #if !CONFIG_OKOU_NET_OPENETH
-    if (!s_managed) {
-        return;
-    }
-    esp_wifi_disconnect();
-    apply_wifi_config();
-    s_wifi_backoff_ms = 1000;
-    if (s_have_creds) {
-        esp_wifi_connect();
+    if (s_managed) {
+        okou_wifi_reload();
     }
 #endif
 }
@@ -176,10 +130,10 @@ esp_err_t okou_net_start(bool manage)
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_RETURN_ON_ERROR(esp_wifi_init(&cfg), OKOU_TAG, "wifi init");
     esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_wifi, NULL);
-    const esp_timer_create_args_t ta = {.callback = retry_cb, .name = "okou_wifi"};
-    esp_timer_create(&ta, &s_retry_timer);
+    /* load (and migrate driver-stored credentials) before the driver switches to RAM storage */
+    ESP_RETURN_ON_ERROR(okou_wifi_init(), OKOU_TAG, "wifi manager");
+    esp_wifi_set_storage(WIFI_STORAGE_RAM); /* networks live in okl/wifis, not in the driver */
     esp_wifi_set_mode(WIFI_MODE_STA);
-    apply_wifi_config();
     return esp_wifi_start();
 #endif
 }
@@ -206,7 +160,7 @@ int okou_net_describe(char *buf, size_t len)
     if (s_has_ip && esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
         return snprintf(buf, len, "wifi ssid=%s rssi=%d ch=%d ip=%s", (char *)ap.ssid, ap.rssi, ap.primary, s_ip);
     }
-    return snprintf(buf, len, "wifi %s ip=%s%s", s_has_ip ? "up" : "down", s_ip[0] ? s_ip : "-",
-                    s_have_creds || !s_managed ? "" : " (no credentials)");
+    return snprintf(buf, len, "wifi %s ip=%s saved=%d%s", s_has_ip ? "up" : "down", s_ip[0] ? s_ip : "-",
+                    okou_wifi_count(), okou_wifi_count() || !s_managed ? "" : " (no credentials)");
 #endif
 }

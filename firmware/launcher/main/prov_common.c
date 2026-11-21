@@ -38,10 +38,17 @@ bool prov_apply(const char *line, char *err, size_t n)
     bool ok = str_field(wifi, "ssid", 32, &ssid, err, n) && str_field(wifi, "pass", 64, &pass, err, n) &&
               str_field(j, "hub", 99, &hub, err, n) && str_field(tok, "id", 95, &cid, err, n) &&
               str_field(tok, "secret", 99, &csec, err, n) && str_field(j, "name", 32, &name, err, n);
+    if (ok && ssid && ssid[0]) { /* adds to the saved networks (up to OKOU_WIFI_MAX), never replaces them */
+        bool hidden = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(wifi, "hidden"));
+        if (okou_wifi_add(ssid, pass ? pass : "", hidden) != ESP_OK) {
+            snprintf(err, n, "saving Wi-Fi network failed");
+            ok = false;
+        }
+    }
     if (ok) {
-        const char *keys[] = {"ssid", "pass", "hub", "cid", "csec", "name"};
-        const char *vals[] = {ssid, pass, hub, cid, csec, name};
-        for (int i = 0; i < 6 && ok; i++) {
+        const char *keys[] = {"hub", "cid", "csec", "name"};
+        const char *vals[] = {hub, cid, csec, name};
+        for (int i = 0; i < 4 && ok; i++) {
             if (vals[i] && okou_nvs_set_str(keys[i], vals[i]) != ESP_OK) {
                 snprintf(err, n, "NVS write failed (%s)", keys[i]);
                 ok = false;
@@ -50,5 +57,18 @@ bool prov_apply(const char *line, char *err, size_t n)
     }
     cJSON_Delete(j);
     return ok;
+}
+
+const char *prov_request_op(const char *line)
+{
+    static char op[16];
+    op[0] = '\0';
+    cJSON *j = cJSON_Parse(line);
+    const cJSON *o = cJSON_GetObjectItemCaseSensitive(j, "op");
+    if (cJSON_IsString(o)) {
+        strlcpy(op, o->valuestring, sizeof(op));
+    }
+    cJSON_Delete(j);
+    return op[0] ? op : NULL;
 }
 
