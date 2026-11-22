@@ -120,6 +120,7 @@ async function apiRoute(request, env, url, parts) {
     const rest = "/" + parts.slice(2).join("/");
     const fwd = new Request(`https://d/device${rest}${url.search}`, request);
     fwd.headers.set("X-Device-Id", dev.id);
+    fwd.headers.set("X-Device-Auth", "token");
     return deviceStub(env, dev.id).fetch(fwd);
   }
   if (parts[1] === "config" && parts.length === 2) {
@@ -219,6 +220,7 @@ export default {
       const rest = "/" + parts.slice(1).join("/");
       const fwd = new Request(`https://d/device${rest}${url.search}`, request);
       fwd.headers.set("X-Device-Id", dev.id);
+      fwd.headers.set("X-Device-Auth", "access");
       return deviceStub(env, dev.id).fetch(fwd);
     }
 
@@ -570,6 +572,7 @@ export class DeviceHub extends DurableObject {
       partition: hello?.partition ?? null,
       connected_at: this.kvGet("connected_at"),
       last_seen: lastSeen || null,
+      auth: this.kvGet("auth") ?? null, // credential of the current/last connection: "token" | "access"
     };
   }
 
@@ -592,8 +595,10 @@ export class DeviceHub extends DurableObject {
       }
       const pair = new WebSocketPair();
       this.ctx.acceptWebSocket(pair[1], ["device"]);
+      const auth = request.headers.get("X-Device-Auth") || null; // "token" | "access"
       this.kvSet("connected_at", Date.now());
-      this.addItem("conn", { state: "connected" }, null);
+      this.kvSet("auth", auth);
+      this.addItem("conn", { state: "connected", auth }, null);
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
     if (p[0] === "images" && p[1] && request.method === "GET") {
