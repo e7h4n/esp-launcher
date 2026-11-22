@@ -57,7 +57,12 @@ const acked = new Promise((resolve, reject) => {
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
     if (m.t === "ack") resolve();
-    if (m.t === "req") ws.send(JSON.stringify({ t: "res", id: m.id, ok: true, data: { echo: m.op, args: m.args } }));
+    if (m.t === "req" && m.op === "auth.set" && globalThis.refuseAuthSet) {
+      ws.send(JSON.stringify({ t: "res", id: m.id, ok: false, error: "unknown op: auth.set" }));
+    } else if (m.t === "req") {
+      if (m.op === "auth.set") globalThis.gotToken = m.args.token;
+      ws.send(JSON.stringify({ t: "res", id: m.id, ok: true, data: { echo: m.op, args: m.args } }));
+    }
   };
   ws.onerror = (e) => reject(new Error("ws error " + (e.message || "")));
   setTimeout(() => reject(new Error("no ack")), 8000);
@@ -79,12 +84,29 @@ check("install without a signature is relayed", r.status === 200 && r.j.data?.ec
 rr = await fetch(`${BASE}/api/device/images/${sha}`, { headers: { authorization: `Bearer ${token}` } });
 const got = new Uint8Array(await rr.arrayBuffer());
 check("device pulls the image with its token", rr.status === 200 && got.length === 4 && got[0] === 0xe9);
+
+// online reset: old firmware refuses auth.set -> nothing changes
+globalThis.refuseAuthSet = true;
+r = await call(`/api/devices/${dev}/rotate`, { key, method: "POST" });
+check("rotate on old firmware is refused", r.status === 409 && /auth.set/.test(r.j.error), JSON.stringify(r.j));
+rr = await fetch(`${BASE}/api/device/images/${sha}`, { headers: { authorization: `Bearer ${token}` } });
+check("refused rotation keeps the old token", rr.status === 200);
+// online reset: device takes the new token, old one is revoked
+globalThis.refuseAuthSet = false;
+r = await call(`/api/devices/${dev}/rotate`, { key, method: "POST" });
+check("rotate over the live connection", r.status === 200 && r.j.rotated && globalThis.gotToken?.startsWith("okl_dev_"), JSON.stringify(r.j));
+rr = await fetch(`${BASE}/api/device/images/${sha}`, { headers: { authorization: `Bearer ${globalThis.gotToken}` } });
+check("new token works", rr.status === 200);
+rr = await fetch(`${BASE}/api/device/images/${sha}`, { headers: { authorization: `Bearer ${token}` } });
+check("old token revoked after rotation", rr.status === 401);
 ws.close();
+r = await call(`/api/devices/${dev}/rotate`, { key, method: "POST" });
+check("rotate needs the device online", r.status === 409);
 
 // cleanup
 r = await call(`/api/devices/${dev}`, { key, method: "DELETE" });
 check("owner deletes the device", r.status === 200);
-r = await call("/api/device/images/" + sha, { token });
+r = await call("/api/device/images/" + sha, { token: globalThis.gotToken });
 check("deleted device token stops working", r.status === 401);
 r = await call(`/api/keys/${encodeURIComponent(keyId)}`, { user: A, method: "DELETE" });
 r = await call("/api/me", { key });

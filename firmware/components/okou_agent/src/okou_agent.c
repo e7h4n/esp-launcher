@@ -28,6 +28,7 @@
 #include "esp_crt_bundle.h"
 #include "esp_websocket_client.h"
 #include "esp_heap_caps.h"
+#include "driver/gpio.h"
 #include "sdkconfig.h"
 #include "okou_priv.h"
 
@@ -1168,6 +1169,26 @@ esp_err_t okou_agent_start(const okou_config_t *cfg)
     snprintf(s_boot_id, sizeof(s_boot_id), "%08" PRIx32, esp_random());
     s_rolled_back = esp_ota_get_last_invalid_partition() != NULL;
     record_rollback();
+
+#if CONFIG_OKOU_SETUP_BUTTON_GPIO >= 0
+    if (g_okou_cfg.role == OKOU_ROLE_APP) {
+        /* Setup gesture: button held while the app starts -> launcher with BLE provisioning. */
+        const gpio_num_t pin = (gpio_num_t)CONFIG_OKOU_SETUP_BUTTON_GPIO;
+        gpio_set_direction(pin, GPIO_MODE_INPUT);
+        gpio_set_pull_mode(pin, GPIO_PULLUP_ONLY);
+        if (gpio_get_level(pin) == 0) {
+            ESP_LOGI(TAG, "setup button held: keep holding to open provisioning");
+            int64_t t0 = now_us();
+            while (gpio_get_level(pin) == 0) {
+                if (now_us() - t0 >= (int64_t)CONFIG_OKOU_SETUP_BUTTON_HOLD_MS * US_PER_MS) {
+                    okou_enter_setup(); /* does not return on success */
+                    break;
+                }
+                vTaskDelay(pdMS_TO_TICKS(20));
+            }
+        }
+    }
+#endif
 
     if (g_okou_cfg.role == OKOU_ROLE_APP && !g_okou_cfg.app_validates && CONFIG_OKOU_MAX_FAIL_BOOTS > 0) {
         uint8_t fb = okou_nvs_get_u8(OKOU_KEY_FAIL_BOOTS, 0);

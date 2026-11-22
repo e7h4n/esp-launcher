@@ -53,6 +53,21 @@ menu "okou agent (esp-launcher SDK)"
         int "Agent task priority (keep low)"
         default 2
 
+    config OKOU_SETUP_BUTTON_GPIO
+        int "Button held at app start to open the launcher's BLE provisioning (-1 = off)"
+        range -1 48
+        default -1
+        help
+            A running app normally boots straight back into itself, so the launcher's BLE
+            provisioning is unreachable when the device is offline. If this button (active low)
+            is held for OKOU_SETUP_BUTTON_HOLD_MS while the app starts, the SDK reboots into the
+            launcher in setup mode (okou_enter_setup). Do not use a strapping pin (GPIO0 on ESP32-S3).
+
+    config OKOU_SETUP_BUTTON_HOLD_MS
+        int "Hold time for the setup button (ms)"
+        range 500 10000
+        default 3000
+
     config OKOU_MAX_FAIL_BOOTS
         int "Boots without a hub ack before the SDK boots the launcher (0 = never)"
         range 0 20

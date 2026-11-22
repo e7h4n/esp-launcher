@@ -133,7 +133,7 @@ async function apiRoute(request, env, url, parts) {
       const devices = await Promise.all(
         list.devices.map(async (d) => {
           const s = await (await deviceStub(env, d.id).fetch("https://d/ops/summary")).json();
-          const { token_hash, client_id, token_uuid, ...pub } = d;
+          const { token_hash, token_hash_next, client_id, token_uuid, ...pub } = d;
           return { ...pub, ...s };
         }),
       );
@@ -161,6 +161,31 @@ async function apiRoute(request, env, url, parts) {
   if (parts.length === 3 && request.method === "DELETE") {
     await reg.fetch(new Request(`https://r/devices/${id}`, { method: "DELETE" }));
     return json({ id, deleted: true });
+  }
+  if (parts.length === 4 && parts[3] === "rotate" && request.method === "POST") {
+    // Online reset: hand the device a new device token over its live connection (op auth.set).
+    // The new token is accepted before the device switches; the old one is revoked only after
+    // the device confirmed, so a failure never locks the device out.
+    const token = newToken(DEVICE_TOKEN_PREFIX);
+    const nextReq = (action, extra = {}) =>
+      reg.fetch(new Request(`https://r/devices/${id}/token-next`, {
+        method: "POST", body: JSON.stringify({ owner: who.userId, action, ...extra }),
+      }));
+    await nextReq("set", { token_hash: await tokenHash(token) });
+    const fwd = new Request(`https://d/ops/rpc`, {
+      method: "POST", headers: { "content-type": "application/json", "X-Caller-Type": "user", "X-Device-Id": id },
+      body: JSON.stringify({ op: "auth.set", args: { token }, timeout_ms: 10000 }),
+    });
+    const r = await deviceStub(env, id).fetch(fwd);
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 200 && j.ok) {
+      await nextReq("promote");
+      return json({ id, rotated: true });
+    }
+    await nextReq("clear");
+    if (r.status === 409) return err(409, "device offline");
+    const unsupported = /unknown|not supported|not_supported/i.test(j.error || "");
+    return err(409, unsupported ? "device firmware does not support auth.set (update it, or reset over BLE)" : `device refused: ${j.error || r.status}`);
   }
   const rest = "/" + parts.slice(3).join("/");
   const fwd = new Request(`https://d/ops${rest === "/" ? "" : rest}${url.search}`, request);
@@ -343,6 +368,7 @@ export class Registry extends DurableObject {
     if (!cols.includes("enrolled_by")) this.sql.exec("ALTER TABLE devices ADD COLUMN enrolled_by TEXT");
     if (!cols.includes("owner")) this.sql.exec("ALTER TABLE devices ADD COLUMN owner TEXT");
     if (!cols.includes("token_hash")) this.sql.exec("ALTER TABLE devices ADD COLUMN token_hash TEXT");
+    if (!cols.includes("token_hash_next")) this.sql.exec("ALTER TABLE devices ADD COLUMN token_hash_next TEXT");
     this.sql.exec("CREATE UNIQUE INDEX IF NOT EXISTS devices_token_hash ON devices(token_hash) WHERE token_hash IS NOT NULL");
     this.sql.exec(`CREATE TABLE IF NOT EXISTS keys (
       id TEXT PRIMARY KEY, owner TEXT NOT NULL, hash TEXT UNIQUE NOT NULL, label TEXT,
@@ -362,7 +388,9 @@ export class Registry extends DurableObject {
       return json({ devices: rows.map((r) => this.row(r)) });
     }
     if (p[0] === "by-token") {
-      return json(this.row(this.sql.exec("SELECT * FROM devices WHERE token_hash = ?", p[1]).toArray()[0]) || {});
+      // token_hash_next: a token being handed to the device over its live connection (rotation)
+      const r = this.sql.exec("SELECT * FROM devices WHERE token_hash = ? OR token_hash_next = ?", p[1], p[1]).toArray()[0];
+      return json(this.row(r) || {});
     }
     if (p[0] === "key-by-hash") {
       const k = this.sql.exec("SELECT id, owner FROM keys WHERE hash = ?", p[1]).toArray()[0];
@@ -408,6 +436,15 @@ export class Registry extends DurableObject {
           this.sql.exec("UPDATE devices SET token_hash = ?, label = ? WHERE id = ?", b.token_hash, b.label || cur.label, id);
         }
         return json({ id, rotated: !!cur });
+      }
+      if (p[2] === "token-next" && request.method === "POST") {
+        const b = await request.json();
+        const cur = this.sql.exec("SELECT owner FROM devices WHERE id = ?", id).toArray()[0];
+        if (!cur || cur.owner !== b.owner) return err(404, "unknown device");
+        if (b.action === "set") this.sql.exec("UPDATE devices SET token_hash_next = ? WHERE id = ?", b.token_hash, id);
+        else if (b.action === "promote") this.sql.exec("UPDATE devices SET token_hash = token_hash_next, token_hash_next = NULL WHERE id = ? AND token_hash_next IS NOT NULL", id);
+        else this.sql.exec("UPDATE devices SET token_hash_next = NULL WHERE id = ?", id);
+        return json({ id, action: b.action });
       }
       if (p[2] === "owner" && request.method === "POST") {
         const b = await request.json();

@@ -95,7 +95,8 @@ curl -H "Authorization: Bearer $K" -X POST $H/devices/&lt;id&gt;/install -d '{"k
     <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="hidden" style="width:auto"> 隐藏网络</label>
   </div>
   <div id="wifiOffline" class="hidden">
-    <p>设备离线，需要通过蓝牙添加 Wi-Fi：让设备进入配网（长按 BOOT 3 秒），用电脑或安卓手机的 Chrome 连接。</p>
+    <p>设备离线，需要通过蓝牙添加 Wi-Fi，用电脑或安卓手机的 Chrome 连接。</p>
+    <p class="muted" id="setupHint"></p>
   </div>
   <div class="msg" id="wifiMsg"></div>
   <div class="row">
@@ -113,6 +114,9 @@ const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 const ago = (ms) => { if (!ms) return "—"; const s = Math.round((Date.now() - ms) / 1000); return s < 90 ? `${s} 秒前` : s < 5400 ? `${Math.round(s / 60)} 分钟前` : s < 129600 ? `${Math.round(s / 3600)} 小时前` : new Date(ms).toLocaleString(); };
 document.querySelectorAll(".host").forEach((e) => (e.textContent = location.host));
 let devices = [];
+// How a device enters the launcher's BLE provisioning (see firmware OKOU_SETUP_BUTTON_GPIO).
+const SETUP_HINT = "关机后按住配网键开机，保持 3 秒（Coffee Watch / StopWatch 是 select 键）；只刷了 launcher、还没装应用的板子，开机后长按 BOOT 键 3 秒。";
+document.getElementById("setupHint").textContent = "进入配网模式：" + SETUP_HINT;
 
 async function api(path, opts = {}) {
   const t = await window.Clerk.session.getToken();
@@ -237,7 +241,22 @@ document.addEventListener("click", async (e) => {
     } else if (b.dataset.act === "wifi") {
       openWifi(id);
     } else if (b.dataset.act === "reset") {
-      if (confirm(`重置 ${id}？\n\n通过蓝牙重新写入 Wi-Fi 和一个新的设备令牌，旧令牌立即作废。设备需要在身边。`)) location.href = `/setup?mode=reset&device=${encodeURIComponent(id)}`;
+      const d = devices.find((x) => x.id === id);
+      const ble = `/setup?mode=reset&device=${encodeURIComponent(id)}`;
+      if (d && d.online) {
+        if (!confirm(`重置 ${id}？\n\n设备在线：直接通过 hub 换一个新的设备令牌，旧令牌立即作废，不需要蓝牙。`)) return;
+        b.disabled = true; b.textContent = "重置中…";
+        try {
+          await api(`/devices/${encodeURIComponent(id)}/rotate`, { method: "POST" });
+          b.textContent = "已重置";
+          setTimeout(loadDevices, 4000);
+        } catch (x) {
+          b.disabled = false; b.textContent = "重置";
+          if (confirm(`${x.message}\n\n改用蓝牙重置？`)) location.href = ble;
+        }
+      } else if (confirm(`重置 ${id}？\n\n设备离线，需要通过蓝牙重新写入 Wi-Fi 和新的设备令牌（旧令牌作废）。\n\n先让设备进入配网模式：${SETUP_HINT}`)) {
+        location.href = ble;
+      }
     } else if (b.dataset.act === "delete") {
       if (confirm(`删除 ${id}？它的令牌会立即失效，设备将无法再连接 hub。`)) { await api(`/devices/${id}`, { method: "DELETE" }); loadDevices(); }
     }
