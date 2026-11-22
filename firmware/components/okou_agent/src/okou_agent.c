@@ -1177,10 +1177,19 @@ esp_err_t okou_agent_start(const okou_config_t *cfg)
         gpio_set_direction(pin, GPIO_MODE_INPUT);
         gpio_set_pull_mode(pin, GPIO_PULLUP_ONLY);
         if (gpio_get_level(pin) == 0) {
-            ESP_LOGI(TAG, "launcher button held: keep holding to boot into the launcher");
-            int64_t t0 = now_us();
+            /* Count from power-on: the user starts holding before the app gets here (often
+             * 1-2 s into boot), so require the hold to last until HOLD_MS of uptime, and at
+             * least 500 ms after we first saw it. */
+            const int64_t seen = now_us();
+            int64_t until = (int64_t)CONFIG_OKOU_LAUNCHER_BUTTON_HOLD_MS * US_PER_MS;
+            if (until < seen + 500 * US_PER_MS) {
+                until = seen + 500 * US_PER_MS;
+            }
+            ESP_LOGI(TAG, "launcher button held at %d ms: keep holding until %d ms", (int)(seen / 1000),
+                     (int)(until / 1000));
+            bool fired = false;
             while (gpio_get_level(pin) == 0) {
-                if (now_us() - t0 >= (int64_t)CONFIG_OKOU_LAUNCHER_BUTTON_HOLD_MS * US_PER_MS) {
+                if (now_us() >= until) {
                     const esp_partition_t *lp = okou_launcher_partition();
                     if (lp) {
                         okou_nvs_set_u8(OKOU_KEY_HOLD, 1);
@@ -1190,10 +1199,17 @@ esp_err_t okou_agent_start(const okou_config_t *cfg)
                             esp_restart();
                         }
                     }
+                    fired = true;
                     break;
                 }
                 vTaskDelay(pdMS_TO_TICKS(20));
             }
+            if (!fired) {
+                ESP_LOGI(TAG, "launcher button released at %d ms (needed %d ms)", (int)(now_us() / 1000),
+                         (int)(until / 1000));
+            }
+        } else {
+            ESP_LOGI(TAG, "launcher button not held at %d ms", (int)(now_us() / 1000));
         }
     }
 #endif
