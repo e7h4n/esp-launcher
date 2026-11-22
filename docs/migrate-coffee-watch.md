@@ -44,6 +44,38 @@ expected legacy layout, and never writes nvs/phy/storage/bootloader.
 3. On the watch: Wi-Fi, Dropbox upload, scales and brew history still work.
 4. Power-cycle on battery: the watch must stay on (StopWatch PM1 power hold in the launcher).
 
+## Remote updates (after migration)
+
+Coffee Watch CI builds the launcher variant unsigned. esp-launcher signs it, so the release key
+never leaves this repository:
+
+```bash
+gh workflow run sign-app.yml -R e7h4n/esp-launcher -f run_id=<coffee-watch Actions run id>
+# -> release app-coffee-watch-v0.1.<run> (bin, sig, manifest, ELF), never marked Latest
+```
+
+Then stage the image (`PUT /ops/devices/coffee-watch/images/<sha256>`) and
+`POST /ops/devices/coffee-watch/install {"kind":"app","sha256":...,"sig":...,"version":...}`.
+The running app stores the request and reboots into the launcher. The launcher downloads the
+image, checks its signature and boots it. The app marks itself valid after its local health
+check (`okou_app_mark_valid()`). Expected stream:
+`hello role=launcher` → `install.done` → `hello role=app` → `app.valid {"by":"app"}`. This
+takes about 30 s for 2.2 MB. Verified on 2026-11-22 with v0.1.12 and v0.1.13.
+
+Once the app runs, a reset boots the app directly, not the launcher. The wireless way back is
+`install` or `reboot target=launcher` sent to an app that is **online**. An app that cannot reach
+the hub can only be updated over USB (write the app bin to 0x510000). That is why the launcher
+variant must keep its hub connection healthy:
+
+- **Wi-Fi**: the SDK owns it (`manage_network = true`) and uses the networks saved by the
+  launcher. The watch's own network was migrated once into that list (`wifi list`).
+- **Clock**: TLS checks certificate dates, so the app starts SNTP on the first IP. Without
+  SNTP the handshake fails with -0x2700.
+- **Internal RAM**: BLE, the display and Dropbox TLS leave little internal RAM for the SDK
+  tasks. The variant moves the Wi-Fi hot paths and non-ISR FreeRTOS functions out of IRAM, and
+  NimBLE buffers to PSRAM. v0.1.13 reports `heap_internal_free` ≈ 30 KB and
+  `heap_internal_largest` ≈ 21 KB; the hub task needs about 5.5 KB.
+
 ## Rollback
 
 `esptool.py --chip esp32s3 -p PORT -b 921600 write_flash 0 <backup>.bin` restores the exact
