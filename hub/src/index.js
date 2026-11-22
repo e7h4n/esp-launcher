@@ -82,6 +82,33 @@ function page(html, env) {
   });
 }
 
+// Online reset: hand the device a new device token over its live connection (op auth.set).
+// The new token is accepted before the device switches; the old one is revoked only after the
+// device confirmed, so a failure never locks the device out.
+async function rotateDevice(env, id, owner) {
+  const reg = registry(env);
+  const token = newToken(DEVICE_TOKEN_PREFIX);
+  const nextReq = (action, extra = {}) =>
+    reg.fetch(new Request(`https://r/devices/${id}/token-next`, {
+      method: "POST", body: JSON.stringify({ owner, action, ...extra }),
+    }));
+  const set = await nextReq("set", { token_hash: await tokenHash(token) });
+  if (!set.ok) return set;
+  const r = await deviceStub(env, id).fetch(new Request("https://d/ops/rpc", {
+    method: "POST", headers: { "content-type": "application/json", "X-Caller-Type": "user", "X-Device-Id": id },
+    body: JSON.stringify({ op: "auth.set", args: { token }, timeout_ms: 10000 }),
+  }));
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 200 && j.ok) {
+    await nextReq("promote");
+    return json({ id, rotated: true });
+  }
+  await nextReq("clear");
+  if (r.status === 409) return err(409, "device offline");
+  const unsupported = /unknown|not supported|not_supported/i.test(j.error || "");
+  return err(409, unsupported ? "device firmware does not support auth.set (update it, or reset over BLE)" : `device refused: ${j.error || r.status}`);
+}
+
 async function apiRoute(request, env, url, parts) {
   // parts: ["api", ...]
   if (parts[1] === "device") {
@@ -163,29 +190,7 @@ async function apiRoute(request, env, url, parts) {
     return json({ id, deleted: true });
   }
   if (parts.length === 4 && parts[3] === "rotate" && request.method === "POST") {
-    // Online reset: hand the device a new device token over its live connection (op auth.set).
-    // The new token is accepted before the device switches; the old one is revoked only after
-    // the device confirmed, so a failure never locks the device out.
-    const token = newToken(DEVICE_TOKEN_PREFIX);
-    const nextReq = (action, extra = {}) =>
-      reg.fetch(new Request(`https://r/devices/${id}/token-next`, {
-        method: "POST", body: JSON.stringify({ owner: who.userId, action, ...extra }),
-      }));
-    await nextReq("set", { token_hash: await tokenHash(token) });
-    const fwd = new Request(`https://d/ops/rpc`, {
-      method: "POST", headers: { "content-type": "application/json", "X-Caller-Type": "user", "X-Device-Id": id },
-      body: JSON.stringify({ op: "auth.set", args: { token }, timeout_ms: 10000 }),
-    });
-    const r = await deviceStub(env, id).fetch(fwd);
-    const j = await r.json().catch(() => ({}));
-    if (r.status === 200 && j.ok) {
-      await nextReq("promote");
-      return json({ id, rotated: true });
-    }
-    await nextReq("clear");
-    if (r.status === 409) return err(409, "device offline");
-    const unsupported = /unknown|not supported|not_supported/i.test(j.error || "");
-    return err(409, unsupported ? "device firmware does not support auth.set (update it, or reset over BLE)" : `device refused: ${j.error || r.status}`);
+    return rotateDevice(env, id, who.userId);
   }
   const rest = "/" + parts.slice(3).join("/");
   const fwd = new Request(`https://d/ops${rest === "/" ? "" : rest}${url.search}`, request);
@@ -275,6 +280,12 @@ export default {
       }
       if (parts.length === 3 && request.method === "PUT") {
         return registry(env).fetch(new Request(`https://r/devices/${id}`, request));
+      }
+      if (parts.length === 4 && parts[3] === "rotate" && request.method === "POST") {
+        // admin (behind Access): same online reset for the device's owner
+        const e = await (await registry(env).fetch(`https://r/devices/${id}`)).json();
+        if (!e.id || !e.owner) return err(404, "unknown or unowned device");
+        return rotateDevice(env, id, e.owner);
       }
       if (parts.length === 4 && parts[3] === "owner" && request.method === "POST") {
         // migration: assign an existing (Access-enrolled) device to a Clerk user
