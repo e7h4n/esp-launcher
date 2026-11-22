@@ -123,6 +123,18 @@ drop them from its retain buffer):
 
 Built-in commands every device registers (via `cmd`): `help`, `version`, `heap`, `wifi`.
 
+Python runtime app only (`firmware/pyrt`, see its README):
+
+| op | args | res.data |
+|---|---|---|
+| `py.exec` | `{"code":"...", "eval":false}` | `{"output", "result" (eval only, repr), "exception" (traceback or null)}`; runs in `__main__` between bytecodes of the running script; one at a time; answer is deferred until the code finished (use `timeout_ms`) |
+| `py.interrupt` | `{}` | `{"running":bool}`; KeyboardInterrupt in running code |
+| `py.reset` | `{}` | `{}`; soft reset: `boot.py` and `main.py` run again (files are kept) |
+| `py.safe_boot` | `{}` | `{}`; reboots once without running `main.py` |
+| `term.write` | `{"data":"..."}` | `{}`; raw REPL input; Ctrl-C (`\u0003`) interrupts running code |
+
+`print()` and REPL output arrive as log lines with level `O`.
+
 `install` args:
 ```json
 {"kind":"app",                       // "app" | "launcher"
