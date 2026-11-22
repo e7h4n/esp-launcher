@@ -107,7 +107,7 @@ let clerkReady = null;
 if (MODE === "clerk" && CLERK_FAPI && !CLERK_FAPI.startsWith("__")) {
   clerkReady = new Promise((resolve, reject) => {
     const sc = document.createElement("script");
-    sc.src = `https://${CLERK_FAPI}/npm/@clerk/clerk-js@5/dist/clerk.browser.js`;
+    sc.src = `https://${CLERK_FAPI}/npm/@clerk/clerk-js@6/dist/clerk.browser.js`;
     sc.async = true; sc.crossOrigin = "anonymous";
     sc.setAttribute("data-clerk-publishable-key", CLERK_PK);
     sc.onload = () => window.Clerk.load().then(() => resolve(window.Clerk), reject);

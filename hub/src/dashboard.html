@@ -135,7 +135,7 @@ if (!FAPI || FAPI.startsWith("__")) {
   $("cfg").classList.remove("hidden");
 } else {
   const sc = document.createElement("script");
-  sc.src = `https://${FAPI}/npm/@clerk/clerk-js@5/dist/clerk.browser.js`;
+  sc.src = `https://${FAPI}/npm/@clerk/clerk-js@6/dist/clerk.browser.js`;
   sc.async = true; sc.crossOrigin = "anonymous";
   sc.setAttribute("data-clerk-publishable-key", PK);
   sc.onload = async () => {
