@@ -184,7 +184,7 @@ async def main():
     record("install request + device image download", st == 200 and j.get("ok") and sim.downloaded == (200, sha),
            f"HTTP {st} {j} downloaded={sim.downloaded}")
     inst = [r for r in sim.reqs if r["op"] == "install"]
-    record("install url points at hub", bool(inst) and inst[0]["args"]["url"] == f"https://{HUB}/device/images/{sha}",
+    record("install url is a hub download link", bool(inst) and inst[0]["args"]["url"].startswith(f"https://{HUB}/api/dl/{DEV}/"),
            inst[0]["args"]["url"] if inst else "no install req")
     st, _ = await asyncio.to_thread(http, "GET", f"/device/images/{sha}", OPS)
     record("ops token cannot download device images", st in (401, 403), f"HTTP {st}")

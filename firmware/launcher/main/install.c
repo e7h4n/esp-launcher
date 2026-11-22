@@ -153,13 +153,18 @@ static void run_install(inst_t *in)
         emit_failed(in, "no target partition");
         return;
     }
-    /* Credentials are only ever sent to our own hub: /device/images/<sha> URLs are
-     * fetched from the configured hub base regardless of the host in `url`. */
+    /* Credentials are only ever sent to our own hub: hub paths (/api/..., /device/images/<sha>)
+     * are fetched from the configured hub base regardless of the host in `url`. */
     char base[128] = "";
     char url[320];
     bool to_hub = true;
     okou_hub_http_base(base, sizeof(base));
-    const char *path = in->url[0] ? strstr(in->url, "/device/images/") : NULL;
+    /* /api/... (download links, /api/device/images) must be kept whole: launchers <= 0.1.23
+     * matched "/device/images/" inside "/api/device/images/" and fetched the Access path. */
+    const char *path = in->url[0] ? strstr(in->url, "/api/") : NULL;
+    if (!path && in->url[0]) {
+        path = strstr(in->url, "/device/images/");
+    }
     if (!in->url[0]) {
         snprintf(url, sizeof(url), "%s/device/images/%s", base, in->sha);
     } else if (path) {

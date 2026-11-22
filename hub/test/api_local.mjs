@@ -77,10 +77,16 @@ r = await call(`/api/devices/${dev}/rpc`, { key, method: "POST", body: { op: "st
 check("developer secret drives the device (rpc relay)", r.status === 200 && r.j.data?.echo === "status", JSON.stringify(r.j));
 const img = new Uint8Array([0xe9, 1, 2, 3]);
 const sha = [...new Uint8Array(await crypto.subtle.digest("SHA-256", img))].map((b) => b.toString(16).padStart(2, "0")).join("");
-let rr = await fetch(`${BASE}/api/devices/${dev}/images/${sha}`, { method: "PUT", headers: { authorization: `Bearer ${key}` }, body: img });
+var rr = await fetch(`${BASE}/api/devices/${dev}/images/${sha}`, { method: "PUT", headers: { authorization: `Bearer ${key}` }, body: img });
 check("stage image with developer secret", rr.status === 200);
 r = await call(`/api/devices/${dev}/install`, { key, method: "POST", body: { kind: "app", sha256: sha, version: "1.1" } });
-check("install without a signature is relayed", r.status === 200 && r.j.data?.echo === "install" && r.j.data.args.url.includes("/api/device/images/"), JSON.stringify(r.j?.data?.args?.url || r.j));
+check("install without a signature is relayed", r.status === 200 && r.j.data?.echo === "install" && r.j.data.args.url.includes(`/api/dl/${dev}/`), JSON.stringify(r.j?.data?.args?.url || r.j));
+const dlPath = new URL(r.j.data.args.url).pathname;
+rr = await fetch(BASE + dlPath);
+const dlBody = new Uint8Array(await rr.arrayBuffer());
+check("install download link works without auth headers", rr.status === 200 && dlBody.length === 4 && dlBody[0] === 0xe9);
+rr = await fetch(BASE + dlPath.replace(/[0-9a-f]{48}$/, "0".repeat(48)));
+check("unknown download link is rejected", rr.status === 404);
 rr = await fetch(`${BASE}/api/device/images/${sha}`, { headers: { authorization: `Bearer ${token}` } });
 const got = new Uint8Array(await rr.arrayBuffer());
 check("device pulls the image with its token", rr.status === 200 && got.length === 4 && got[0] === 0xe9);

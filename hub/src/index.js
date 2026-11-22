@@ -123,6 +123,10 @@ async function apiRoute(request, env, url, parts) {
     fwd.headers.set("X-Device-Auth", "token");
     return deviceStub(env, dev.id).fetch(fwd);
   }
+  if (parts[1] === "dl" && parts.length === 4 && request.method === "GET") {
+    if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(parts[2]) || !/^[0-9a-f]{48}$/.test(parts[3])) return err(404, "not found");
+    return deviceStub(env, parts[2]).fetch(new Request(`https://d/device/dl/${parts[3]}`));
+  }
   if (parts[1] === "config" && parts.length === 2) {
     return json({ clerk_publishable_key: env.CLERK_PUBLISHABLE_KEY || null, hub: url.host });
   }
@@ -603,6 +607,12 @@ export class DeviceHub extends DurableObject {
     if (p[0] === "images" && p[1] && request.method === "GET") {
       return this.serveImage(p[1]);
     }
+    if (p[0] === "dl" && p[1] && request.method === "GET") {
+      // one-time-style download URL handed out with an install (capability in the URL; 30 min)
+      const d = this.kvGet(`dl:${p[1]}`);
+      if (!d || d.exp < Date.now()) return err(404, "download link expired");
+      return this.serveImage(d.sha);
+    }
     return err(404, "not found");
   }
 
@@ -821,8 +831,9 @@ export class DeviceHub extends DurableObject {
       const origin = request.headers.get("X-Hub-Origin");
       const args = {
         kind,
-        // download path matches the credential the device is connected with
-        url: `${origin}${this.kvGet("auth") === "token" ? "/api/device/images" : "/device/images"}/${sha}`,
+        // Download link carrying its own capability: works for every launcher without auth
+        // headers (launchers <= 0.1.23 rewrote /api/device/images URLs to the Access path).
+        url: `${origin}/api/dl/${request.headers.get("X-Device-Id")}/${this.mintDownload(sha)}`,
         size: meta.size,
         sha256: sha,
         sig: b.sig || "",
@@ -835,6 +846,12 @@ export class DeviceHub extends DurableObject {
     }
 
     return err(404, "not found");
+  }
+
+  mintDownload(sha) {
+    const t = [...crypto.getRandomValues(new Uint8Array(24))].map((b) => b.toString(16).padStart(2, "0")).join("");
+    this.kvSet(`dl:${t}`, { sha, exp: Date.now() + 30 * 60 * 1000 });
+    return t;
   }
 
   async stageImage(sha, buf) {
