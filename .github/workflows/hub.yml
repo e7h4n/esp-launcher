@@ -28,6 +28,11 @@ jobs:
       - run: for f in src/*.js scripts/*.mjs; do node --check "$f"; done
       - run: python3 -m py_compile test/prod_e2e.py
       - run: npx wrangler deploy --dry-run --outdir dist
+      - name: API end-to-end against a local hub (developer secrets, device tokens, relay)
+        run: |
+          npx wrangler dev --var DEV_INSECURE:1 --port 8787 --ip 127.0.0.1 > /tmp/wdev.log 2>&1 &
+          for i in $(seq 1 60); do curl -s -m 2 http://127.0.0.1:8787/api/config >/dev/null && break; sleep 1; done
+          node test/api_local.mjs http://127.0.0.1:8787 || { tail -50 /tmp/wdev.log; exit 1; }
 
   deploy:
     needs: check
@@ -45,7 +50,17 @@ jobs:
       - name: Configure Cloudflare Access applications
         run: node scripts/setup-access.mjs >> "$GITHUB_ENV"
       - name: Deploy worker
-        run: npx wrangler deploy --var "DEVICE_AUD:$DEVICE_AUD" --var "OPS_AUD:$OPS_AUD"
+        env:
+          CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
+        run: |
+          if [ -z "$CLERK_PUBLISHABLE_KEY" ]; then echo "::warning::repo variable CLERK_PUBLISHABLE_KEY not set; sign-in disabled"; fi
+          npx wrangler deploy --var "DEVICE_AUD:$DEVICE_AUD" --var "OPS_AUD:$OPS_AUD" --var "CLERK_PUBLISHABLE_KEY:$CLERK_PUBLISHABLE_KEY"
+      - name: Clerk secret key
+        env:
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+        run: |
+          if [ -z "$CLERK_SECRET_KEY" ]; then echo "::warning::secret CLERK_SECRET_KEY not set"; exit 0; fi
+          printf '%s' "$CLERK_SECRET_KEY" | npx wrangler secret put CLERK_SECRET_KEY
       - name: Enrollment credential (Access service tokens edit only)
         env:
           HUB_ENROLL_CF_TOKEN: ${{ secrets.HUB_ENROLL_CF_TOKEN }}
@@ -55,8 +70,8 @@ jobs:
       - name: Smoke test
         run: |
           for i in $(seq 1 20); do
-            body=$(curl -s -A esp-launcher-ci https://$HUB_HOST/ || true)
-            [ "$body" = "esp-launcher hub" ] && echo "hub is up" && exit 0
+            body=$(curl -s -A esp-launcher-ci https://$HUB_HOST/api/config || true)
+            echo "$body" | grep -q "\"hub\":\"$HUB_HOST\"" && echo "hub is up: $body" && exit 0
             sleep 6
           done
           echo "hub did not answer"; exit 1

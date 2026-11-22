@@ -1,7 +1,9 @@
 // esp-launcher hub: Cloudflare Worker + Durable Objects. Contract: docs/protocol.md
 import { DurableObject } from "cloudflare:workers";
 import { verifyAccessJwt } from "./access.js";
+import { verifyClerkJwt, clerkFrontendApi, newToken, tokenHash, bearer, DEVICE_TOKEN_PREFIX, DEV_KEY_PREFIX } from "./auth.js";
 import SETUP_HTML from "./setup.html";
+import DASHBOARD_HTML from "./dashboard.html";
 
 const RETENTION_MS = 7 * 24 * 3600 * 1000;
 const RETENTION_ITEMS = 200000;
@@ -46,10 +48,138 @@ function deviceStub(env, id) {
 
 // ---------------------------------------------------------------- worker
 
+// Developers sign in with Clerk (browser) or use a developer secret (okl_key_..., API/Okou).
+// Devices use their device token (okl_dev_...). No Cloudflare Access on these paths.
+async function authUser(request, env, url) {
+  if (env.DEV_INSECURE === "1" && request.headers.get("X-Dev-User")) {
+    return { userId: request.headers.get("X-Dev-User"), via: "session" }; // local tests only
+  }
+  const t = bearer(request);
+  if (!t) return null;
+  if (t.startsWith(DEV_KEY_PREFIX)) {
+    const k = await (await registry(env).fetch(`https://r/key-by-hash/${await tokenHash(t)}`)).json();
+    return k.owner ? { userId: k.owner, via: "key", keyId: k.id } : null;
+  }
+  if (!env.CLERK_PUBLISHABLE_KEY) return null;
+  const c = await verifyClerkJwt(t, env.CLERK_PUBLISHABLE_KEY, [url.origin]);
+  return c ? { userId: c.userId, via: "session" } : null;
+}
+
+function page(html, env) {
+  const pk = env.CLERK_PUBLISHABLE_KEY || "";
+  const fapi = clerkFrontendApi(pk) || "";
+  const body = html.replaceAll("__CLERK_PUBLISHABLE_KEY__", pk).replaceAll("__CLERK_FAPI__", fapi);
+  const src = fapi ? `https://${fapi}` : "";
+  return new Response(body, {
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+      "content-security-policy":
+        `default-src 'self'; script-src 'self' 'unsafe-inline' ${src} https://challenges.cloudflare.com; ` +
+        `connect-src 'self' ${src} https://clerk-telemetry.com; img-src 'self' data: https://img.clerk.com; ` +
+        `style-src 'self' 'unsafe-inline'; frame-src https://challenges.cloudflare.com; worker-src 'self' blob:`,
+    },
+  });
+}
+
+async function apiRoute(request, env, url, parts) {
+  // parts: ["api", ...]
+  if (parts[1] === "device") {
+    // device side: bearer device token
+    const t = bearer(request);
+    if (!t || !t.startsWith(DEVICE_TOKEN_PREFIX)) return err(401, "device token required");
+    const dev = await (await registry(env).fetch(`https://r/by-token/${await tokenHash(t)}`)).json();
+    if (!dev.id) return err(401, "unknown device token");
+    const rest = "/" + parts.slice(2).join("/");
+    const fwd = new Request(`https://d/device${rest}${url.search}`, request);
+    fwd.headers.set("X-Device-Id", dev.id);
+    return deviceStub(env, dev.id).fetch(fwd);
+  }
+  if (parts[1] === "config" && parts.length === 2) {
+    return json({ clerk_publishable_key: env.CLERK_PUBLISHABLE_KEY || null, hub: url.host });
+  }
+  const who = await authUser(request, env, url);
+  if (!who) return err(401, "sign in, or pass a developer secret as Authorization: Bearer okl_key_...");
+  const reg = registry(env);
+  const owner = encodeURIComponent(who.userId);
+
+  if (parts[1] === "me" && parts.length === 2) return json({ user_id: who.userId, via: who.via });
+
+  if (parts[1] === "keys") {
+    if (who.via !== "session") return err(403, "manage developer secrets from a signed-in session");
+    if (parts.length === 2 && request.method === "GET") return reg.fetch(`https://r/keys?owner=${owner}`);
+    if (parts.length === 2 && request.method === "POST") {
+      const b = await request.json().catch(() => ({}));
+      const secret = newToken(DEV_KEY_PREFIX);
+      const id = secret.slice(0, DEV_KEY_PREFIX.length + 6);
+      const r = await reg.fetch(new Request("https://r/keys", {
+        method: "POST",
+        body: JSON.stringify({ id, owner: who.userId, hash: await tokenHash(secret), label: String(b.label || "").slice(0, 60) }),
+      }));
+      if (!r.ok) return r;
+      return json({ id, secret, label: b.label || "", note: "shown once; keep it with you, never on a device" });
+    }
+    if (parts.length === 3 && request.method === "DELETE") {
+      return reg.fetch(new Request(`https://r/keys/${encodeURIComponent(parts[2])}?owner=${owner}`, { method: "DELETE" }));
+    }
+    return err(404, "not found");
+  }
+
+  if (parts[1] !== "devices") return err(404, "not found");
+  const id = parts[2];
+  if (!id) {
+    if (request.method === "GET") {
+      const list = await (await reg.fetch(`https://r/list?owner=${owner}`)).json();
+      const devices = await Promise.all(
+        list.devices.map(async (d) => {
+          const s = await (await deviceStub(env, d.id).fetch("https://d/ops/summary")).json();
+          const { token_hash, client_id, token_uuid, ...pub } = d;
+          return { ...pub, ...s };
+        }),
+      );
+      return json({ devices });
+    }
+    if (request.method === "POST") {
+      // add a device: returns its device token once (written to the device by the setup page)
+      const b = await request.json().catch(() => ({}));
+      const did = String(b.device_id || "").toLowerCase();
+      if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(did)) return err(400, "device_id: lowercase letters, digits and dashes");
+      const token = newToken(DEVICE_TOKEN_PREFIX);
+      const r = await reg.fetch(new Request(`https://r/devices/${did}/token`, {
+        method: "POST",
+        body: JSON.stringify({ owner: who.userId, label: String(b.label || did).slice(0, 60), token_hash: await tokenHash(token), rotate: !!b.rotate }),
+      }));
+      if (!r.ok) return r;
+      const out = await r.json();
+      return json({ device_id: did, hub: url.host, token, rotated: !!out.rotated, note: "shown once; the setup page writes it to the device" });
+    }
+    return err(405, "method not allowed");
+  }
+  if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(id)) return err(400, "invalid device id");
+  const entry = await (await reg.fetch(`https://r/devices/${id}`)).json();
+  if (!entry.id || entry.owner !== who.userId) return err(404, "unknown device");
+  if (parts.length === 3 && request.method === "DELETE") {
+    await reg.fetch(new Request(`https://r/devices/${id}`, { method: "DELETE" }));
+    return json({ id, deleted: true });
+  }
+  const rest = "/" + parts.slice(3).join("/");
+  const fwd = new Request(`https://d/ops${rest === "/" ? "" : rest}${url.search}`, request);
+  fwd.headers.set("X-Device-Id", id);
+  fwd.headers.set("X-Caller-Type", who.via === "session" ? "user" : "service");
+  fwd.headers.set("X-Writes-Require-Human", entry.writes_require_human ? "1" : "0");
+  fwd.headers.set("X-Hub-Origin", url.origin);
+  fwd.headers.set("X-Image-Path", entry.token_hash ? "/api/device/images" : "/device/images");
+  return deviceStub(env, id).fetch(fwd);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const parts = url.pathname.split("/").filter(Boolean);
+
+    if (parts[0] === "api") return apiRoute(request, env, url, parts);
+    if (url.pathname === "/" || url.pathname === "/devices") return page(DASHBOARD_HTML, env);
+    if (url.pathname === "/setup") return page(SETUP_HTML.replace("__HUB_MODE__", "clerk"), env);
 
     if (parts[0] === "device") {
       const who = await authenticate(request, env, "device");
@@ -66,7 +196,7 @@ export default {
       const who = await authenticate(request, env, "ops");
       if (!who) return err(403, "operator authentication required");
       if (parts[1] === "setup" && parts.length === 2 && request.method === "GET") {
-        return new Response(SETUP_HTML, {
+        return new Response(SETUP_HTML.replace("__HUB_MODE__", "access"), {
           headers: {
             "content-type": "text/html; charset=utf-8",
             "cache-control": "no-store",
@@ -106,6 +236,10 @@ export default {
       if (parts.length === 3 && request.method === "PUT") {
         return registry(env).fetch(new Request(`https://r/devices/${id}`, request));
       }
+      if (parts.length === 4 && parts[3] === "owner" && request.method === "POST") {
+        // migration: assign an existing (Access-enrolled) device to a Clerk user
+        return registry(env).fetch(new Request(`https://r/devices/${id}/owner`, request));
+      }
       const entry = await (await registry(env).fetch(`https://r/devices/${id}`)).json();
       if (!entry.id) return err(404, "unknown device");
       const rest = "/" + parts.slice(3).join("/");
@@ -117,7 +251,6 @@ export default {
       return deviceStub(env, id).fetch(fwd);
     }
 
-    if (url.pathname === "/") return new Response("esp-launcher hub\n");
     return err(404, "not found");
   },
 };
@@ -193,6 +326,12 @@ export class Registry extends DurableObject {
     const cols = this.sql.exec("PRAGMA table_info(devices)").toArray().map((c) => c.name);
     if (!cols.includes("token_uuid")) this.sql.exec("ALTER TABLE devices ADD COLUMN token_uuid TEXT");
     if (!cols.includes("enrolled_by")) this.sql.exec("ALTER TABLE devices ADD COLUMN enrolled_by TEXT");
+    if (!cols.includes("owner")) this.sql.exec("ALTER TABLE devices ADD COLUMN owner TEXT");
+    if (!cols.includes("token_hash")) this.sql.exec("ALTER TABLE devices ADD COLUMN token_hash TEXT");
+    this.sql.exec("CREATE UNIQUE INDEX IF NOT EXISTS devices_token_hash ON devices(token_hash) WHERE token_hash IS NOT NULL");
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS keys (
+      id TEXT PRIMARY KEY, owner TEXT NOT NULL, hash TEXT UNIQUE NOT NULL, label TEXT,
+      created_at INTEGER, last_used_at INTEGER)`);
   }
   row(r) {
     return r && { ...r, writes_require_human: !!r.writes_require_human };
@@ -201,7 +340,36 @@ export class Registry extends DurableObject {
     const url = new URL(request.url);
     const p = url.pathname.split("/").filter(Boolean);
     if (p[0] === "list") {
-      return json({ devices: this.sql.exec("SELECT * FROM devices ORDER BY id").toArray().map((r) => this.row(r)) });
+      const owner = url.searchParams.get("owner");
+      const rows = owner
+        ? this.sql.exec("SELECT * FROM devices WHERE owner = ? ORDER BY id", owner).toArray()
+        : this.sql.exec("SELECT * FROM devices ORDER BY id").toArray();
+      return json({ devices: rows.map((r) => this.row(r)) });
+    }
+    if (p[0] === "by-token") {
+      return json(this.row(this.sql.exec("SELECT * FROM devices WHERE token_hash = ?", p[1]).toArray()[0]) || {});
+    }
+    if (p[0] === "key-by-hash") {
+      const k = this.sql.exec("SELECT id, owner FROM keys WHERE hash = ?", p[1]).toArray()[0];
+      if (k) this.sql.exec("UPDATE keys SET last_used_at = ? WHERE id = ?", Date.now(), k.id);
+      return json(k || {});
+    }
+    if (p[0] === "keys") {
+      if (!p[1] && request.method === "GET") {
+        const owner = url.searchParams.get("owner");
+        return json({ keys: this.sql.exec("SELECT id, label, created_at, last_used_at FROM keys WHERE owner = ? ORDER BY created_at", owner).toArray() });
+      }
+      if (!p[1] && request.method === "POST") {
+        const b = await request.json();
+        const n = this.sql.exec("SELECT COUNT(*) AS n FROM keys WHERE owner = ?", b.owner).one().n;
+        if (n >= 10) return err(409, "at most 10 developer secrets per account");
+        this.sql.exec("INSERT INTO keys (id, owner, hash, label, created_at) VALUES (?, ?, ?, ?, ?)", b.id, b.owner, b.hash, b.label || "", Date.now());
+        return json({ id: b.id });
+      }
+      if (p[1] && request.method === "DELETE") {
+        this.sql.exec("DELETE FROM keys WHERE id = ? AND owner = ?", decodeURIComponent(p[1]), url.searchParams.get("owner"));
+        return json({ deleted: true });
+      }
     }
     if (p[0] === "by-client") {
       const r = this.sql.exec("SELECT * FROM devices WHERE client_id = ?", decodeURIComponent(p[1])).toArray()[0];
@@ -209,6 +377,30 @@ export class Registry extends DurableObject {
     }
     if (p[0] === "devices") {
       const id = p[1];
+      if (p[2] === "token" && request.method === "POST") {
+        const b = await request.json();
+        const cur = this.sql.exec("SELECT * FROM devices WHERE id = ?", id).toArray()[0];
+        if (cur && cur.owner !== b.owner) return err(409, `device id ${id} is taken`);
+        if (cur && !b.rotate) return err(409, `device ${id} already exists; pass rotate:true to issue a new token`);
+        if (!cur) {
+          const n = this.sql.exec("SELECT COUNT(*) AS n FROM devices WHERE owner = ?", b.owner).one().n;
+          if (n >= 50) return err(409, "at most 50 devices per account");
+          this.sql.exec(
+            "INSERT INTO devices (id, client_id, label, writes_require_human, created_at, owner, token_hash) VALUES (?, ?, ?, 0, ?, ?, ?)",
+            id, `token:${id}`, b.label || id, Date.now(), b.owner, b.token_hash,
+          );
+        } else {
+          this.sql.exec("UPDATE devices SET token_hash = ?, label = ? WHERE id = ?", b.token_hash, b.label || cur.label, id);
+        }
+        return json({ id, rotated: !!cur });
+      }
+      if (p[2] === "owner" && request.method === "POST") {
+        const b = await request.json();
+        const cur = this.sql.exec("SELECT id FROM devices WHERE id = ?", id).toArray()[0];
+        if (!cur) return err(404, "unknown device");
+        this.sql.exec("UPDATE devices SET owner = ? WHERE id = ?", b.owner || null, id);
+        return json({ id, owner: b.owner || null });
+      }
       if (request.method === "GET") {
         return json(this.row(this.sql.exec("SELECT * FROM devices WHERE id = ?", id).toArray()[0]) || {});
       }
@@ -544,7 +736,8 @@ export class DeviceHub extends DurableObject {
       }
       const kind = b.kind || "app";
       if (!["app", "launcher"].includes(kind)) return err(400, "kind must be app or launcher");
-      if (!b.sig) return err(400, "sig required");
+      // No application-layer signing: integrity is the SHA-256 over HTTPS. Older launchers still
+      // verify a signature, so it is passed through when given.
       let sha = (b.sha256 || "").toLowerCase();
       if (b.url) {
         const r = await fetch(b.url, { redirect: "follow" });
@@ -561,10 +754,10 @@ export class DeviceHub extends DurableObject {
       const origin = request.headers.get("X-Hub-Origin");
       const args = {
         kind,
-        url: `${origin}/device/images/${sha}`,
+        url: `${origin}${request.headers.get("X-Image-Path") || "/device/images"}/${sha}`,
         size: meta.size,
         sha256: sha,
-        sig: b.sig,
+        sig: b.sig || "",
         name: b.name || "",
         version: b.version || "",
       };

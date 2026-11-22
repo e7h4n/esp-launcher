@@ -98,7 +98,28 @@
 const SVC = "6f6b6f75-0001-4c61-756e-636865720000";
 const CHR = "6f6b6f75-0002-4c61-756e-636865720000";
 const $ = (id) => document.getElementById(id);
-const onHub = location.protocol === "https:" && location.pathname.startsWith("/ops/");
+const onHub = location.protocol === "https:" && (location.pathname.startsWith("/ops/") || location.pathname === "/setup");
+// "clerk": served at /setup, developer signed in with Clerk, device gets a hub device token.
+// "access": legacy /ops/setup behind Cloudflare Access (service-token credentials).
+const MODE = "__HUB_MODE__";
+const CLERK_PK = "__CLERK_PUBLISHABLE_KEY__", CLERK_FAPI = "__CLERK_FAPI__";
+let clerkReady = null;
+if (MODE === "clerk" && CLERK_FAPI && !CLERK_FAPI.startsWith("__")) {
+  clerkReady = new Promise((resolve, reject) => {
+    const sc = document.createElement("script");
+    sc.src = `https://${CLERK_FAPI}/npm/@clerk/clerk-js@5/dist/clerk.browser.js`;
+    sc.async = true; sc.crossOrigin = "anonymous";
+    sc.setAttribute("data-clerk-publishable-key", CLERK_PK);
+    sc.onload = () => window.Clerk.load().then(() => resolve(window.Clerk), reject);
+    sc.onerror = () => reject(new Error("Clerk failed to load"));
+    document.head.appendChild(sc);
+  });
+}
+async function sessionToken() {
+  const c = await clerkReady;
+  if (!c.user) { c.redirectToSignIn({ redirectUrl: location.href }); throw new Error("请先登录"); }
+  return c.session.getToken();
+}
 let chr = null, dev = null, waiters = [];
 let scanResults = [], savedNets = [];
 const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -167,7 +188,13 @@ if (!navigator.bluetooth) {
   $("support").textContent = "浏览器会弹出设备列表，选择 okl- 开头的设备。设备未配网、或长按 BOOT 键 3 秒后才会广播。";
 }
 
-if (onHub) {
+if (MODE === "clerk") {
+  if (!clerkReady) pill($("who"), "hub 未配置登录", "bad");
+  else clerkReady.then((c) => {
+    if (!c.user) { pill($("who"), "未登录", "bad"); c.redirectToSignIn({ redirectUrl: location.href }); return; }
+    pill($("who"), `已登录 ${c.user.primaryEmailAddress ? c.user.primaryEmailAddress.emailAddress : c.user.id}`, "ok");
+  }).catch((e) => pill($("who"), e.message, "bad"));
+} else if (onHub) {
   fetch("/ops/whoami", { credentials: "same-origin" }).then((r) => r.json()).then((w) => {
     pill($("who"), w.email ? `已登录 ${w.email}` : w.type, "ok");
   }).catch(() => pill($("who"), "未登录 hub", "bad"));
@@ -237,6 +264,17 @@ $("go").onclick = async () => {
     if ($("wifiOnly").checked) {
       token = null; hub = null;
       log("只添加 Wi-Fi，不重新注册");
+    } else if (MODE === "clerk") {
+      const r = await fetch("/api/devices", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer " + (await sessionToken()) },
+        body: JSON.stringify({ device_id: id, label: $("label").value.trim() || undefined, rotate: $("rotate").checked }),
+      });
+      const j = await r.json();
+      if (r.status === 409) throw new Error(j.error === `device id ${id} is taken` ? "这个设备 ID 已被别人使用，换一个" : "这个设备 ID 已注册。只想换 Wi-Fi 请勾选“只添加 Wi-Fi”，要重新签发令牌请勾选下面那一项");
+      if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
+      token = j.token; hub = j.hub;
+      log(`hub 已添加设备 ${j.device_id}${j.rotated ? "（已重新签发令牌）" : ""}`);
     } else if (onHub) {
       const r = await fetch("/ops/enroll", {
         method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" },

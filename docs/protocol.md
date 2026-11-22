@@ -17,12 +17,27 @@ operator (Okou, human)         --HTTPS-> Cloudflare Access (/ops/*)    --> Worke
   identity is the JWT `common_name` (service token client id), mapped to a device id by the
   hub registry. Anything the device says about its own id is informational only.
 
+## Accounts and credentials
+
+Transport security is HTTPS/WSS. There is no application-layer signing.
+
+- **Developers** sign in with Clerk on the hub website (`/`), or use a **developer secret**
+  (`okl_key_...`, created on the website, up to 10 per account) as `Authorization: Bearer` for
+  the API, the CLI and Okou. A developer secret pushes: firmware, scripts, exec, commands. It is
+  never written to a device.
+- **Devices** get a **device token** (`okl_dev_...`) when the developer adds them (website or
+  `POST /api/devices`). BLE / USB provisioning writes it to NVS `okl/tok`. It only pulls:
+  connect, report logs and events, download the images sent to that device.
+- Tokens are random 256-bit strings; the hub stores only their SHA-256.
+- Legacy (being retired): Cloudflare Access service tokens on `/device/*` and `/ops/*`.
+
 ## Device endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET (WebSocket upgrade) | `/device/connect` | Long-lived control/telemetry channel |
-| GET | `/device/images/<sha256>` | Download a firmware image staged for this device (binary, `Content-Length` set) |
+| GET (WebSocket upgrade) | `/api/device/connect` | Long-lived control/telemetry channel (`Authorization: Bearer okl_dev_...`) |
+| GET | `/api/device/images/<sha256>` | Download a firmware image staged for this device (binary, `Content-Length` set) |
+| | `/device/connect`, `/device/images/<sha256>` | Legacy paths behind Cloudflare Access |
 
 Plain-text development mode (local tests only): when the hub runs with `DEV_INSECURE=1`
 the device may instead send header `X-Dev-Client-Id: <client id>` and no Access headers.
@@ -118,6 +133,7 @@ drop them from its retain buffer):
 | `param.set` | `{"name":"beep_ms","value":800,"persist":true}` | `{"name","value"}`; rejects out-of-range | launcher, app |
 | `reboot` | `{"target":"self"\|"launcher"\|"app"}` | `{}` sent before rebooting (~300 ms delay) | launcher, app |
 | `install` | see below | `{"accepted":true}`; progress via events | launcher, app (app hands off to launcher) |
+| `auth.set` | `{"token":"okl_dev_..."}` | `{}`, then reconnects with the device token (migration off Access credentials) | launcher, app |
 | `coredump` | `{}` | `{"present":bool,"summary":{...}}` | launcher |
 | `coredump.erase` | `{}` | `{}` | launcher |
 
@@ -151,8 +167,8 @@ Install rules:
    install after connecting.
 2. The launcher streams the download into the target partition (`app` partition for kind=app,
    the inactive launcher slot for kind=launcher), hashing as it goes. Never buffers the full image.
-3. Before switching the boot partition it verifies: size match, SHA-256 match, ECDSA signature
-   valid against the public key compiled into the launcher, and the image header chip id matches.
+3. Before switching the boot partition it verifies: size match, SHA-256 match, the image header
+   chip id, and the IDF image checks (`esp_ota_end`). No signature (a `sig` argument is ignored).
 4. Events: `install.progress` `{"sha256","written","size"}` at most every 10 %, then
    `install.done` `{"sha256","version","kind"}` or `install.failed` `{"sha256","error"}`.
 5. On success it sets the boot partition and reboots. For kind=launcher the new launcher must
@@ -233,12 +249,11 @@ The launcher also reads its console (USB-Serial-JTAG on ESP32-S3, UART0 otherwis
 `OKL-PROVISION-OK` or `OKL-PROVISION-ERR <reason>`. The line is never echoed or logged. This is
 the path used during the first USB flash.
 
-## Signing
+## Releases
 
-- CI holds an ECDSA P-256 private key (GitHub secret `FIRMWARE_SIGNING_KEY`, PEM).
-- `sig = base64(DER(ECDSA_sign(SHA256(bin))))`, produced with
-  `openssl dgst -sha256 -sign key.pem -out x.sig x.bin`.
-- The public key PEM lives in `firmware/keys/release_pub.pem` and is embedded in the launcher.
+- Launchers released before 2026-11-22 still require an ECDSA P-256 signature from
+  `FIRMWARE_SIGNING_KEY`; CI keeps producing `.sig` files until every device runs a launcher
+  without that check. New launchers ignore signatures.
 - Versions are `<major.minor from firmware/version.txt>.<CI run number>` (local builds:
   `<major.minor>.0-dev`); every push to main publishes its own release `fw-v<version>`.
 - CI publishes for each build: `<name>-<version>-<chip>.bin`, `.sig` (base64 text), `.elf`
@@ -247,7 +262,22 @@ the path used during the first USB flash.
   (`CONFIG_APP_RETRIEVE_LEN_ELF_SHA=64`), so `firmware/tools/symbolize.py --device <id>` finds
   the exact ELF of a crash in the releases and prints the backtrace as source lines.
 
-## Operator API (hub, `/ops/*`)
+## Developer API (hub, `/api/*`)
+
+`Authorization: Bearer <Clerk session JWT | okl_key_...>`. Every device route checks that the
+device belongs to the caller (404 otherwise).
+
+| Method | Path | Body | Result |
+|---|---|---|---|
+| GET | `/api/me` | | `{"user_id","via":"session"\|"key"}` |
+| GET / POST | `/api/keys` | `{"label"}` | list (no secrets) / `{"id","secret"}` once; signed-in session only |
+| DELETE | `/api/keys/<id>` | | revoke |
+| GET | `/api/devices` | | the caller's devices with status |
+| POST | `/api/devices` | `{"device_id","label","rotate"?}` | `{"device_id","hub","token"}` (device token, once); 409 if the id is taken |
+| DELETE | `/api/devices/<id>` | | removes the device; its token stops working |
+| * | `/api/devices/<id>/{stream,rpc,images/<sha>,install,tail}` | | as the `/ops` routes below; `install` needs no `sig` |
+
+## Operator API (legacy, `/ops/*` behind Cloudflare Access)
 
 All responses are JSON. Errors: `{"error":"..."}` with a 4xx/5xx status.
 

@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP Hub</title>
+<style>
+  :root { color-scheme: light dark; --b: #8884; --m: #888; }
+  body { font: 15px/1.5 -apple-system, system-ui, sans-serif; max-width: 920px; margin: 0 auto; padding: 24px 16px 64px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 24px; }
+  h1 { font-size: 20px; margin: 0; } h2 { font-size: 16px; margin: 28px 0 8px; }
+  table { width: 100%; border-collapse: collapse; } th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--b); }
+  th { font-weight: 600; color: var(--m); font-size: 13px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+  input { font: inherit; padding: 6px 8px; border: 1px solid var(--b); border-radius: 6px; background: transparent; color: inherit; }
+  button, .btn { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--b); background: transparent; color: inherit; cursor: pointer; text-decoration: none; }
+  button.primary, .btn.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .muted { color: var(--m); font-size: 13px; } .ok { color: #16a34a; } .bad { color: #dc2626; }
+  .secret { font-family: ui-monospace, monospace; word-break: break-all; padding: 10px; border: 1px dashed #d97706; border-radius: 6px; margin: 8px 0; }
+  code, pre { font-family: ui-monospace, monospace; font-size: 13px; } pre { padding: 10px; border: 1px solid var(--b); border-radius: 6px; overflow-x: auto; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ESP Hub</h1>
+  <div id="user"></div>
+</header>
+
+<div id="signin"></div>
+<p id="cfg" class="bad hidden">这个 hub 还没有配置登录（CLERK_PUBLISHABLE_KEY）。</p>
+
+<main id="app" class="hidden">
+  <p class="muted">给任意 ESP32 刷通用 launcher，用蓝牙配网接入 hub；之后固件和 Python 脚本都通过 hub 远程更新。传输走 HTTPS。</p>
+
+  <h2>我的设备</h2>
+  <table>
+    <thead><tr><th>设备 ID</th><th>名称</th><th>状态</th><th>固件</th><th>最后在线</th><th></th></tr></thead>
+    <tbody id="devices"><tr><td colspan="6" class="muted">加载中…</td></tr></tbody>
+  </table>
+  <div class="row">
+    <a class="btn primary" href="/setup">蓝牙配网添加设备</a>
+    <span class="muted">或只生成设备令牌（USB 串口配网时用）：</span>
+    <input id="newId" placeholder="设备 ID，如 paper-2" size="16">
+    <input id="newLabel" placeholder="名称（可选）" size="14">
+    <button id="addDev">生成令牌</button>
+  </div>
+  <div id="devTok" class="hidden">
+    <div class="muted">设备令牌只显示这一次，写进设备；设备用它连 hub、上报日志、拉取固件：</div>
+    <div class="secret" id="devTokVal"></div>
+  </div>
+
+  <h2>开发者密钥</h2>
+  <p class="muted">用来推送固件和脚本、远程执行和下发命令（命令行、Okou）。只留在你手里，不要写进设备。</p>
+  <table>
+    <thead><tr><th>ID</th><th>备注</th><th>创建</th><th>最近使用</th><th></th></tr></thead>
+    <tbody id="keys"><tr><td colspan="5" class="muted">加载中…</td></tr></tbody>
+  </table>
+  <div class="row">
+    <input id="keyLabel" placeholder="备注，如 Okou、笔记本" size="20">
+    <button id="addKey">新建开发者密钥</button>
+  </div>
+  <div id="keyNew" class="hidden">
+    <div class="muted">密钥只显示这一次：</div>
+    <div class="secret" id="keyNewVal"></div>
+  </div>
+
+  <h2>API</h2>
+  <pre>H=https://<span class="host"></span>/api
+K=okl_key_...   # 开发者密钥
+curl -H "Authorization: Bearer $K" $H/devices
+curl -H "Authorization: Bearer $K" -X POST $H/devices/&lt;id&gt;/rpc -d '{"op":"status"}'
+curl -H "Authorization: Bearer $K" -X PUT  $H/devices/&lt;id&gt;/images/&lt;sha256&gt; --data-binary @app.bin
+curl -H "Authorization: Bearer $K" -X POST $H/devices/&lt;id&gt;/install -d '{"kind":"app","sha256":"&lt;sha256&gt;","version":"1.0"}'
+curl -H "Authorization: Bearer $K" -X POST $H/devices/&lt;id&gt;/rpc -d '{"op":"py.exec","args":{"code":"print(1+1)"}}'</pre>
+</main>
+
+<script>
+"use strict";
+const PK = "__CLERK_PUBLISHABLE_KEY__", FAPI = "__CLERK_FAPI__";
+const $ = (id) => document.getElementById(id);
+const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const ago = (ms) => { if (!ms) return "—"; const s = Math.round((Date.now() - ms) / 1000); return s < 90 ? `${s} 秒前` : s < 5400 ? `${Math.round(s / 60)} 分钟前` : s < 129600 ? `${Math.round(s / 3600)} 小时前` : new Date(ms).toLocaleString(); };
+document.querySelectorAll(".host").forEach((e) => (e.textContent = location.host));
+
+async function api(path, opts = {}) {
+  const t = await window.Clerk.session.getToken();
+  const r = await fetch("/api" + path, { ...opts, headers: { "content-type": "application/json", authorization: "Bearer " + t, ...(opts.headers || {}) } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
+  return j;
+}
+
+async function loadDevices() {
+  const { devices } = await api("/devices");
+  $("devices").innerHTML = devices.length ? devices.map((d) => `<tr>
+    <td><code>${esc(d.id)}</code></td><td>${esc(d.label)}</td>
+    <td class="${d.online ? "ok" : "muted"}">${d.online ? "在线" : "离线"}</td>
+    <td>${esc(d.hello ? `${d.hello.fw.name} ${d.hello.fw.version} (${d.hello.role})` : "—")}</td>
+    <td>${ago(d.last_seen)}</td>
+    <td><button data-del="${esc(d.id)}">删除</button></td></tr>`).join("")
+    : `<tr><td colspan="6" class="muted">还没有设备。</td></tr>`;
+}
+
+async function loadKeys() {
+  const { keys } = await api("/keys");
+  $("keys").innerHTML = keys.length ? keys.map((k) => `<tr>
+    <td><code>${esc(k.id)}…</code></td><td>${esc(k.label)}</td><td>${ago(k.created_at)}</td><td>${ago(k.last_used_at)}</td>
+    <td><button data-revoke="${esc(k.id)}">吊销</button></td></tr>`).join("")
+    : `<tr><td colspan="5" class="muted">还没有开发者密钥。</td></tr>`;
+}
+
+document.addEventListener("click", async (e) => {
+  const del = e.target.getAttribute("data-del"), rev = e.target.getAttribute("data-revoke");
+  try {
+    if (del && confirm(`删除设备 ${del}？它的令牌会失效。`)) { await api(`/devices/${del}`, { method: "DELETE" }); loadDevices(); }
+    if (rev && confirm(`吊销密钥 ${rev}…？`)) { await api(`/keys/${encodeURIComponent(rev)}`, { method: "DELETE" }); loadKeys(); }
+  } catch (x) { alert(x.message); }
+});
+
+$("addDev").onclick = async () => {
+  try {
+    const j = await api("/devices", { method: "POST", body: JSON.stringify({ device_id: $("newId").value.trim().toLowerCase(), label: $("newLabel").value.trim() || undefined }) });
+    $("devTokVal").textContent = j.token; $("devTok").classList.remove("hidden"); loadDevices();
+  } catch (x) { alert(x.message); }
+};
+$("addKey").onclick = async () => {
+  try {
+    const j = await api("/keys", { method: "POST", body: JSON.stringify({ label: $("keyLabel").value.trim() }) });
+    $("keyNewVal").textContent = j.secret; $("keyNew").classList.remove("hidden"); loadKeys();
+  } catch (x) { alert(x.message); }
+};
+
+if (!FAPI || FAPI.startsWith("__")) {
+  $("cfg").classList.remove("hidden");
+} else {
+  const sc = document.createElement("script");
+  sc.src = `https://${FAPI}/npm/@clerk/clerk-js@5/dist/clerk.browser.js`;
+  sc.async = true; sc.crossOrigin = "anonymous";
+  sc.setAttribute("data-clerk-publishable-key", PK);
+  sc.onload = async () => {
+    await window.Clerk.load();
+    if (!window.Clerk.user) {
+      window.Clerk.mountSignIn($("signin"), { forceRedirectUrl: location.href, signUpForceRedirectUrl: location.href });
+      return;
+    }
+    window.Clerk.mountUserButton($("user"));
+    $("app").classList.remove("hidden");
+    loadDevices().catch((x) => ($("devices").innerHTML = `<tr><td colspan="6" class="bad">${esc(x.message)}</td></tr>`));
+    loadKeys().catch((x) => ($("keys").innerHTML = `<tr><td colspan="5" class="bad">${esc(x.message)}</td></tr>`));
+  };
+  document.head.appendChild(sc);
+}
+</script>
+</body>
+</html>

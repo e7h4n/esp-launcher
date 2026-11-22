@@ -6,7 +6,7 @@ preview_urls = false
 
 routes = [{ pattern = "hub.c3p0.dev", custom_domain = true }]
 
-# The BLE setup page is bundled as text and served at /ops/setup.
+# HTML pages (dashboard at /, BLE setup at /setup and legacy /ops/setup) are bundled as text.
 [[rules]]
 type = "Text"
 globs = ["**/*.html"]
@@ -18,6 +18,8 @@ ACCESS_TEAM = "e7h4n-investments-pages.cloudflareaccess.com"
 ACCOUNT_ID = "e630c3085e396154f7333b9b61f78226"
 DEVICE_AUD = ""
 OPS_AUD = ""
+# Clerk publishable key (non-secret), from the repo variable CLERK_PUBLISHABLE_KEY at deploy time.
+CLERK_PUBLISHABLE_KEY = ""
 
 [[durable_objects.bindings]]
 name = "DEVICE"
