@@ -328,6 +328,7 @@ static void hello_fill(cJSON *o)
     cJSON_AddStringToObject(fw, "idf", d->idf_ver);
     cJSON_AddStringToObject(fw, "sha256", sha);
     cJSON_AddStringToObject(o, "partition", run ? run->label : "");
+    cJSON_AddStringToObject(o, "ota_state", run ? okou_ota_state_str(run) : "");
     cJSON_AddStringToObject(o, "chip", CONFIG_IDF_TARGET);
     cJSON_AddStringToObject(o, "mac", mac);
     cJSON_AddStringToObject(o, "reset_reason", okou_reset_reason_str());
@@ -912,6 +913,28 @@ esp_err_t okou_enter_setup(void)
     return ESP_OK;
 }
 
+esp_err_t okou_app_mark_valid(void)
+{
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    esp_ota_img_states_t st;
+    esp_err_t e = run ? esp_ota_get_state_partition(run, &st) : ESP_ERR_NOT_FOUND;
+    if (e != ESP_OK) {
+        return e == ESP_ERR_NOT_FOUND ? ESP_OK : e; /* no otadata entry (USB flash): nothing to confirm */
+    }
+    if (st != ESP_OTA_IMG_PENDING_VERIFY) {
+        return st == ESP_OTA_IMG_VALID ? ESP_OK : ESP_ERR_INVALID_STATE;
+    }
+    e = esp_ota_mark_app_valid_cancel_rollback();
+    if (e == ESP_OK) {
+        ESP_LOGI(TAG, "app marked valid by its own health check (rollback cancelled)");
+        cJSON *d = cJSON_CreateObject();
+        cJSON_AddStringToObject(d, "partition", run->label);
+        cJSON_AddStringToObject(d, "by", "app");
+        okou_event_json("app.valid", d); /* queued; delivered once the hub is reachable */
+    }
+    return e;
+}
+
 static void on_first_ack(void)
 {
     ESP_LOGI(TAG, "hello acknowledged by hub");
@@ -924,6 +947,7 @@ static void on_first_ack(void)
                 ESP_LOGI(TAG, "app marked valid (rollback cancelled)");
                 cJSON *d = cJSON_CreateObject();
                 cJSON_AddStringToObject(d, "partition", run->label);
+                cJSON_AddStringToObject(d, "by", "hub_ack");
                 okou_event_json("app.valid", d);
             }
         }

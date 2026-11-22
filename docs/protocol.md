@@ -48,6 +48,7 @@ Production never accepts it.
  "role":"launcher",             // "launcher" | "app"
  "fw":{"name":"esp-launcher","version":"0.1.0","idf":"v5.4.1","sha256":"<elf sha256 from esp_app_desc>"},
  "partition":"launcher_a",      // running partition label
+ "ota_state":"valid",           // running image: valid | pending_verify | new | unset (USB flash) | ...
  "chip":"esp32s3","mac":"aa:bb:cc:dd:ee:ff",
  "reset_reason":"ESP_RST_SW",
  "rolled_back":false,           // true when bootloader rolled back the previous image
@@ -160,7 +161,8 @@ app area (launcher slots 2.5 MB each, app 2.94 MB).
   in PENDING_VERIFY. The SDK marks it valid only after the hub acknowledged its `hello`.
   A crash, watchdog reset or power cycle before that rolls back to the launcher slot.
 - Apps that must keep working offline set `okou_config_t.app_validates = true`: they mark
-  themselves valid after their own startup health check, and the SDK applies neither the
+  themselves valid after their own startup health check by calling `okou_app_mark_valid()`
+  (which reports `app.valid` with `by: "app"`), and the SDK applies neither the
   hub-ack validation nor the fail_boots safety net below. `CONFIG_OKOU_MAX_FAIL_BOOTS=0` also
   disables the safety net.
 - Apps that let the SDK own Wi-Fi (`manage_network = true`) and build with
