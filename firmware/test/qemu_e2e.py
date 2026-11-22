@@ -267,8 +267,9 @@ class Runner:
         img = open(os.path.join(signdir, "hello-app-0.1.0-esp32.bin"), "rb").read()
         st, j = self.hub.req("PUT", f"/ops/devices/{a.device_id}/images/{man['sha256']}", raw=img)
         mark = self.hub.mark()
+        # no signature: integrity is the SHA-256 over HTTPS (docs/protocol.md "Install rules")
         st2, j2 = self.hub.req("POST", f"/ops/devices/{a.device_id}/install",
-                               {"kind": "app", "sha256": man["sha256"], "sig": man["sig"],
+                               {"kind": "app", "sha256": man["sha256"],
                                 "name": "hello-app", "version": "0.1.0"})
         events = []
         done = self.hub.wait_for("event", lambda it: ev_name(it) in ("install.done", "install.failed"),
@@ -402,23 +403,18 @@ class Runner:
         self.record("coredump symbolized", sha_ok and "abort" in joined and "hello_app/main/main.c" in joined,
                     f"dump elf sha={dump_sha} matches built ELF={sha_ok} frames={joined[:300]}")
 
-        # 8. bad signature is rejected
-        badkey = os.path.join(self.out, "bad_priv.pem")
-        subprocess.run(["openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", badkey],
-                       check=True)
-        baddir = os.path.join(self.out, "badsig")
-        bad = self.sign(a.app_bin, badkey, baddir)
-        self.hub.req("PUT", f"/ops/devices/{a.device_id}/images/{bad['sha256']}", raw=img)
+        # 8. a truncated image (valid SHA-256 of what was staged) is rejected and never booted
+        bad = img[: len(img) // 2]
+        bad_sha = hashlib.sha256(bad).hexdigest()
+        self.hub.req("PUT", f"/ops/devices/{a.device_id}/images/{bad_sha}", raw=bad)
         mark = self.hub.mark()
         st2, j2 = self.hub.req("POST", f"/ops/devices/{a.device_id}/install",
-                               {"kind": "app", "sha256": bad["sha256"], "sig": bad["sig"],
-                                "name": "hello-app", "version": "0.1.0"})
+                               {"kind": "app", "sha256": bad_sha, "name": "hello-app", "version": "0.1.0"})
         res = self.hub.wait_for("event", lambda it: ev_name(it) in ("install.done", "install.failed"),
                                 a.install_timeout, after=mark)
         rb = self.hub.rpc("reboot", {"target": "app"})
-        self.record("bad signature rejected",
-                    res is not None and ev_name(res) == "install.failed" and "signature" in
-                    ev_data(res).get("error", "") and not rb.get("ok"),
+        self.record("truncated image rejected",
+                    res is not None and ev_name(res) == "install.failed" and not rb.get("ok"),
                     f"install={j2} event={ev_name(res) if res else None} {ev_data(res) if res else ''}; "
                     f"reboot target=app afterwards -> {rb.get('error')}")
 

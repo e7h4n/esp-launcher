@@ -88,7 +88,7 @@ static char *s_txbuf;
 static okou_hooks_t s_hooks;
 static char s_install_state[20] = "queued";
 static bool s_started, s_cfg_ok, s_dev;
-static char s_hub[100], s_cid[96], s_csec[100], s_url[180];
+static char s_hub[100], s_cid[96], s_csec[100], s_tok[96], s_url[180];
 static char s_headers[256];
 static op_t s_ops[MAX_OPS];
 static int s_nops;
@@ -144,29 +144,35 @@ static bool starts_with(const char *s, const char *p)
 
 static bool load_config(void)
 {
-    s_hub[0] = s_cid[0] = s_csec[0] = '\0';
+    s_hub[0] = s_cid[0] = s_csec[0] = s_tok[0] = '\0';
     okou_nvs_get_str("hub", s_hub, sizeof(s_hub));
     okou_nvs_get_str("cid", s_cid, sizeof(s_cid));
     okou_nvs_get_str("csec", s_csec, sizeof(s_csec));
+    okou_nvs_get_str(OKOU_KEY_TOKEN, s_tok, sizeof(s_tok));
     if (!s_hub[0]) {
         ESP_LOGW(TAG, "not provisioned: okl/hub missing");
         return false;
     }
+    /* A hub device token (okl/tok) uses the /api/device/ endpoints with a bearer header; otherwise
+     * the legacy Cloudflare Access service token on /device/. */
+    const char *connect_path = s_tok[0] ? "/api/device/connect" : "/device/connect";
     if (starts_with(s_hub, "ws://") || starts_with(s_hub, "wss://")) {
         s_dev = starts_with(s_hub, "ws://");
         const char *host = strstr(s_hub, "://") + 3;
         const char *path = strchr(host, '/');
         if (!path || path[1] == '\0') {
             int hl = path ? (int)(path - s_hub) : (int)strlen(s_hub);
-            snprintf(s_url, sizeof(s_url), "%.*s/device/connect", hl, s_hub);
+            snprintf(s_url, sizeof(s_url), "%.*s%s", hl, s_hub, connect_path);
         } else {
             strlcpy(s_url, s_hub, sizeof(s_url));
         }
     } else {
         s_dev = false;
-        snprintf(s_url, sizeof(s_url), "wss://%s/device/connect", s_hub);
+        snprintf(s_url, sizeof(s_url), "wss://%s%s", s_hub, connect_path);
     }
-    if (s_dev) {
+    if (s_tok[0]) {
+        snprintf(s_headers, sizeof(s_headers), "Authorization: Bearer %s\r\n", s_tok);
+    } else if (s_dev) {
         if (!s_cid[0]) {
             ESP_LOGW(TAG, "not provisioned: okl/cid missing");
             return false;
@@ -180,7 +186,7 @@ static bool load_config(void)
         snprintf(s_headers, sizeof(s_headers), "CF-Access-Client-Id: %s\r\nCF-Access-Client-Secret: %s\r\n", s_cid,
                  s_csec);
     }
-    ESP_LOGI(TAG, "hub %s (%s)", s_url, s_dev ? "dev, X-Dev-Client-Id" : "Cloudflare Access");
+    ESP_LOGI(TAG, "hub %s (%s)", s_url, s_tok[0] ? "device token" : s_dev ? "dev, X-Dev-Client-Id" : "Cloudflare Access");
     return true;
 }
 
@@ -202,7 +208,11 @@ esp_err_t okou_hub_http_base(char *buf, size_t len)
 
 void okou_http_apply_auth(esp_http_client_handle_t client)
 {
-    if (s_dev) {
+    if (s_tok[0]) {
+        char h[sizeof(s_tok) + 8];
+        snprintf(h, sizeof(h), "Bearer %s", s_tok);
+        esp_http_client_set_header(client, "Authorization", h);
+    } else if (s_dev) {
         esp_http_client_set_header(client, "X-Dev-Client-Id", s_cid);
     } else {
         esp_http_client_set_header(client, "CF-Access-Client-Id", s_cid);
@@ -871,6 +881,21 @@ static void handle_req(const cJSON *root)
         r = okou_param_get_json(cJSON_IsString(n) ? n->valuestring : NULL, data, err, sizeof(err));
     } else if (strcmp(op, "param.set") == 0) {
         r = okou_param_set_json(args, data, err, sizeof(err));
+    } else if (strcmp(op, "auth.set") == 0) {
+        /* Migration from Access credentials: the hub hands the device its device token over the
+         * current connection; the agent reconnects with it after this response. */
+        const cJSON *t = cJSON_GetObjectItemCaseSensitive(args, "token");
+        if (!cJSON_IsString(t) || strncmp(t->valuestring, "okl_dev_", 8) != 0 || strlen(t->valuestring) >= sizeof(s_tok)) {
+            snprintf(err, sizeof(err), "token: okl_dev_... string required");
+            r = ESP_ERR_INVALID_ARG;
+        } else {
+            r = okou_nvs_set_str(OKOU_KEY_TOKEN, t->valuestring);
+            if (r == ESP_OK) {
+                s_reload = true;
+            } else {
+                snprintf(err, sizeof(err), "NVS write failed");
+            }
+        }
     } else if (strcmp(op, "reboot") == 0) {
         r = op_reboot(args, data, err, sizeof(err));
     } else if (strcmp(op, "install") == 0 && g_okou_cfg.role == OKOU_ROLE_APP) {

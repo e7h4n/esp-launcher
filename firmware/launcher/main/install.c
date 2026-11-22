@@ -3,8 +3,9 @@
  *
  * The image is streamed from the hub straight into the target partition while hashing.
  * The first 4 KiB (image header) are held back in RAM and written only after size,
- * SHA-256, ECDSA P-256 signature and chip id all check out, so a rejected or partial
- * download can never be booted (the header sector stays erased).
+ * SHA-256 and chip id check out, so a rejected or partial download can never be booted (the
+ * header sector stays erased). Transport security is HTTPS to the hub; there is no
+ * application-layer signature (a `sig` argument from older hubs is ignored).
  *
  * SPDX-License-Identifier: MIT
  */
@@ -30,8 +31,6 @@
 
 static const char *TAG = "install";
 
-extern const char signing_pub_pem_start[] asm("_binary_signing_pub_pem_start");
-extern const char signing_pub_pem_end[] asm("_binary_signing_pub_pem_end");
 
 #define HOLD_SZ 4096
 #define CHUNK 4096
@@ -40,7 +39,6 @@ extern const char signing_pub_pem_end[] asm("_binary_signing_pub_pem_end");
 typedef struct {
     char kind[10];
     char sha[65];
-    char sig[200];
     char url[256];
     char version[32];
     uint32_t size;
@@ -89,7 +87,6 @@ static bool parse_args(const cJSON *a, inst_t *o, char *err, size_t n)
     str_arg(a, "sha256", o->sha, sizeof(o->sha));
     str_arg(a, "url", o->url, sizeof(o->url));
     str_arg(a, "version", o->version, sizeof(o->version));
-    const cJSON *sig = cJSON_GetObjectItemCaseSensitive(a, "sig");
     const cJSON *size = cJSON_GetObjectItemCaseSensitive(a, "size");
     if (strcmp(o->kind, "app") && strcmp(o->kind, "launcher")) {
         snprintf(err, n, "kind must be app or launcher");
@@ -106,18 +103,6 @@ static bool parse_args(const cJSON *a, inst_t *o, char *err, size_t n)
         }
         o->sha[i] = (char)tolower((unsigned char)o->sha[i]);
     }
-    if (!cJSON_IsString(sig) || strlen(sig->valuestring) >= sizeof(o->sig) || !sig->valuestring[0]) {
-        snprintf(err, n, "sig (base64 DER) missing or too long");
-        return false;
-    }
-    /* strip whitespace (base64 from `base64` without -w0 has newlines) */
-    size_t j = 0;
-    for (const char *p = sig->valuestring; *p; p++) {
-        if (!isspace((unsigned char)*p)) {
-            o->sig[j++] = *p;
-        }
-    }
-    o->sig[j] = '\0';
     if (cJSON_IsNumber(size)) {
         if (size->valuedouble <= 0 || size->valuedouble > 16 * 1024 * 1024) {
             snprintf(err, n, "bad size");
@@ -158,34 +143,6 @@ static void emit_progress(const inst_t *in, uint32_t written, uint32_t size)
     cJSON_AddNumberToObject(d, "written", written);
     cJSON_AddNumberToObject(d, "size", size);
     okou_event_json("install.progress", d);
-}
-
-static int verify_sig(const uint8_t hash[32], const char *sig_b64, char *why, size_t n)
-{
-    uint8_t der[160];
-    size_t dlen = 0;
-    if (mbedtls_base64_decode(der, sizeof(der), &dlen, (const uint8_t *)sig_b64, strlen(sig_b64)) != 0 ||
-        dlen < 8) {
-        snprintf(why, n, "signature is not valid base64 DER");
-        return -1;
-    }
-    mbedtls_pk_context pk;
-    mbedtls_pk_init(&pk);
-    int r = mbedtls_pk_parse_public_key(&pk, (const unsigned char *)signing_pub_pem_start,
-                                        (size_t)(signing_pub_pem_end - signing_pub_pem_start));
-    if (r != 0) {
-        snprintf(why, n, "embedded public key unreadable (-0x%04x)", -r);
-    } else if (!mbedtls_pk_can_do(&pk, MBEDTLS_PK_ECDSA) || mbedtls_pk_get_bitlen(&pk) != 256) {
-        snprintf(why, n, "embedded public key is not ECDSA P-256");
-        r = -1;
-    } else {
-        r = mbedtls_pk_verify(&pk, MBEDTLS_MD_SHA256, hash, 32, der, dlen);
-        if (r != 0) {
-            snprintf(why, n, "signature invalid (-0x%04x)", -r);
-        }
-    }
-    mbedtls_pk_free(&pk);
-    return r;
 }
 
 static void run_install(inst_t *in)
@@ -340,10 +297,6 @@ static void run_install(inst_t *in)
         goto out;
     }
     okou_set_install_state("verifying");
-    if (verify_sig(digest, in->sig, err, sizeof(err)) != 0) {
-        fail = err;
-        goto out;
-    }
     e = esp_ota_write_with_offset(h, hold, hold_len, 0);
     if (e != ESP_OK) {
         snprintf(err, sizeof(err), "flash write (header): %s", esp_err_to_name(e));
