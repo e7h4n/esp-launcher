@@ -35,6 +35,19 @@ typedef esp_err_t (*okou_op_handler_t)(const cJSON *args, cJSON *data, char *err
 /* Registers or overrides an op (e.g. the launcher overrides "install"). */
 esp_err_t okou_op_register(const char *op, okou_op_handler_t handler);
 
+/* Deferred op: for work that runs on another task (e.g. an interpreter). Return ESP_OK to keep
+ * `req` and answer later, from any task, with okou_op_reply() (exactly once; it frees req and
+ * takes ownership of data). Return an error (with err filled) to answer at once. The hub waits
+ * up to the request's timeout_ms (max 60 s); a later reply is dropped by the hub. */
+typedef struct okou_req okou_req_t;
+typedef esp_err_t (*okou_op_async_handler_t)(okou_req_t *req, const cJSON *args, char *err, size_t errlen);
+esp_err_t okou_op_register_async(const char *op, okou_op_async_handler_t handler);
+void okou_op_reply(okou_req_t *req, bool ok, cJSON *data, const char *err);
+
+/* Push one line into the log stream sent to the hub (level E/W/I/D/V or 'O' for plain output).
+ * For output that does not go through ESP_LOG, e.g. an interpreter's print(). Never blocks. */
+void okou_log_text(char level, const char *text, size_t len);
+
 typedef struct {
     void (*on_hello_acked)(void);       /* first hub ack after our hello (agent task) */
     void (*on_request)(const char *op); /* every hub req (agent task) */

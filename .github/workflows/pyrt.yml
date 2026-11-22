@@ -1,0 +1,114 @@
+name: pyrt
+
+# esp-launcher Python runtime: UIFlow2 MicroPython (M5Stack, MIT) + the okou_agent SDK, built as an
+# esp-launcher app. The launcher and the SDK stay C; user code is Python on the device filesystem.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "firmware/pyrt/**"
+      - "firmware/components/okou_agent/**"
+      - ".github/workflows/pyrt.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  UIFLOW_SHA: a61a29409f09f1f4bebae05e15c4bd6dcc4956b6 # m5stack/uiflow-micropython 2.5.5
+  APP_SLOT: "4194304" # 4 MiB: the `app` slot of firmware/partitions/16mb.csv
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - board: M5STACK_PaperColor
+            name: pyrt-papercolor
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: okl
+      - uses: actions/checkout@v4
+        with:
+          repository: m5stack/uiflow-micropython
+          ref: ${{ env.UIFLOW_SHA }}
+          path: uiflow
+      - uses: actions/setup-python@v5
+        id: python
+        with:
+          python-version: "3.11"
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git wget flex bison gperf quilt cmake ninja-build ccache \
+            libffi-dev libssl-dev dfu-util libusb-1.0-0
+      - name: Cache ESP-IDF v5.5.5
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.espressif
+            uiflow/esp-idf
+          key: ${{ runner.os }}-${{ runner.arch }}-ubuntu24.04-idf-v5.5.5-py${{ steps.python.outputs.python-version }}
+      - name: ESP-IDF v5.5.5
+        working-directory: uiflow
+        run: |
+          source tools/ci.sh
+          ci_esp32_idf555_setup
+      - name: UIFlow submodules and patches
+        working-directory: uiflow
+        run: |
+          source esp-idf/export.sh
+          pip install future
+          make -C m5stack submodules
+          make -C m5stack patch
+          make -C m5stack littlefs
+      - name: Apply the esp-launcher overlay
+        run: |
+          VERSION="$(cat okl/firmware/version.txt).${{ github.run_number }}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          python3 okl/firmware/pyrt/apply_overlay.py uiflow okl/firmware ${{ matrix.board }} "$VERSION"
+      - name: Build
+        working-directory: uiflow
+        run: |
+          source esp-idf/export.sh
+          make -C m5stack BOARD=${{ matrix.board }} build
+      - name: Size
+        working-directory: uiflow/m5stack
+        run: |
+          source ../esp-idf/export.sh
+          B=build-${{ matrix.board }}
+          ls -la $B/micropython.bin
+          python -m esp_idf_size --archives $B/micropython.map | head -40 || true
+          size=$(stat -c %s $B/micropython.bin)
+          echo "app image: $size bytes (slot ${APP_SLOT})"
+          test "$size" -le "$APP_SLOT"
+          grep -E '^CONFIG_(PARTITION_TABLE_CUSTOM_FILENAME|MBEDTLS_CERTIFICATE_BUNDLE|APP_PROJECT_VER)=' $B/sdkconfig
+      - name: Collect
+        run: |
+          mkdir -p out
+          B=uiflow/m5stack/build-${{ matrix.board }}
+          cp $B/micropython.bin out/${{ matrix.name }}.bin
+          cp $B/micropython.elf out/${{ matrix.name }}.elf
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}-v${{ env.VERSION }}
+          path: out/*
+      - name: Sign and publish
+        if: github.ref == 'refs/heads/main'
+        env:
+          FIRMWARE_SIGNING_KEY: ${{ secrets.FIRMWARE_SIGNING_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        working-directory: okl
+        run: |
+          set -euo pipefail
+          KEY="$RUNNER_TEMP/key.pem"
+          (umask 077; printf '%s\n' "$FIRMWARE_SIGNING_KEY" > "$KEY")
+          mkdir -p dist
+          firmware/tools/sign.sh ../out/${{ matrix.name }}.bin "$KEY" ${{ matrix.name }} "$VERSION" esp32s3 app dist ../out/${{ matrix.name }}.elf
+          rm -f "$KEY"
+          TAG="app-${{ matrix.name }}-v$VERSION"
+          gh release create "$TAG" dist/* --title "${{ matrix.name }} $VERSION" --latest=false \
+            --notes "esp-launcher Python runtime (UIFlow2 MicroPython ${UIFLOW_SHA:0:7} + okou_agent) for ${{ matrix.board }}."

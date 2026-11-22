@@ -157,6 +157,16 @@ static void capture(char *line, size_t n)
     log_push(level, p, (size_t)(end - p));
 }
 
+void okou_log_text(char level, const char *text, size_t len)
+{
+    while (len && (text[len - 1] == '\n' || text[len - 1] == '\r')) {
+        len--;
+    }
+    if (len) {
+        log_push(strchr("EWIDVO", level) ? level : 'O', text, len > CONFIG_OKOU_LOG_LINE_MAX ? CONFIG_OKOU_LOG_LINE_MAX : len);
+    }
+}
+
 static int okou_vprintf(const char *fmt, va_list ap)
 {
     char line[CONFIG_OKOU_LOG_LINE_MAX + 8];

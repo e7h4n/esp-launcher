@@ -68,7 +68,12 @@ typedef struct {
 typedef struct {
     char op[20];
     okou_op_handler_t fn;
+    okou_op_async_handler_t afn;
 } op_t;
+
+struct okou_req {
+    cJSON *id;
+};
 
 static QueueHandle_t s_rxq, s_txq, s_pollq;
 static esp_websocket_client_handle_t s_ws;
@@ -240,11 +245,12 @@ void okou_schedule_reboot(uint32_t delay_ms)
     portEXIT_CRITICAL(&s_rmux);
 }
 
-esp_err_t okou_op_register(const char *op, okou_op_handler_t handler)
+static esp_err_t op_register(const char *op, okou_op_handler_t handler, okou_op_async_handler_t ahandler)
 {
     for (int i = 0; i < s_nops; i++) {
         if (strcmp(s_ops[i].op, op) == 0) {
             s_ops[i].fn = handler;
+            s_ops[i].afn = ahandler;
             return ESP_OK;
         }
     }
@@ -253,8 +259,19 @@ esp_err_t okou_op_register(const char *op, okou_op_handler_t handler)
     }
     strlcpy(s_ops[s_nops].op, op, sizeof(s_ops[0].op));
     s_ops[s_nops].fn = handler;
+    s_ops[s_nops].afn = ahandler;
     s_nops++;
     return ESP_OK;
+}
+
+esp_err_t okou_op_register(const char *op, okou_op_handler_t handler)
+{
+    return op_register(op, handler, NULL);
+}
+
+esp_err_t okou_op_register_async(const char *op, okou_op_async_handler_t handler)
+{
+    return op_register(op, NULL, handler);
 }
 
 static void txq_push(char *frame)
@@ -641,6 +658,22 @@ static char *build_res_string(const cJSON *id, bool ok, cJSON *data, const char 
     return s;
 }
 
+void okou_op_reply(okou_req_t *req, bool ok, cJSON *data, const char *err)
+{
+    if (!req) {
+        cJSON_Delete(data);
+        return;
+    }
+    char *s = build_res_string(req->id, ok, data, err);
+    cJSON_Delete(req->id);
+    free(req);
+    if (s && strlen(s) > 16384) {
+        free(s);
+        s = NULL;
+    }
+    txq_push(s); /* sent by the agent task; dropped if the hub is not connected */
+}
+
 static esp_err_t run_cmd(const char *name, const cJSON *argv, cJSON *data, char *err, size_t errlen)
 {
     char *out = NULL;
@@ -770,6 +803,26 @@ static void handle_req(const cJSON *root)
     esp_err_t r = ESP_ERR_NOT_SUPPORTED;
     for (int i = 0; i < s_nops; i++) {
         if (strcmp(s_ops[i].op, op) == 0) {
+            if (s_ops[i].afn) {
+                okou_req_t *req = calloc(1, sizeof(*req));
+                if (req) {
+                    req->id = id ? cJSON_Duplicate(id, true) : cJSON_CreateNull();
+                }
+                r = req && req->id ? s_ops[i].afn(req, args, err, sizeof(err)) : ESP_ERR_NO_MEM;
+                if (r == ESP_OK) {
+                    cJSON_Delete(data); /* answered later through okou_op_reply() */
+                    return;
+                }
+                if (req) {
+                    cJSON_Delete(req->id);
+                    free(req);
+                }
+                if (!err[0] && r == ESP_ERR_NO_MEM) {
+                    snprintf(err, sizeof(err), "out of memory");
+                }
+                send_res(id, false, data, err);
+                return;
+            }
             r = s_ops[i].fn(args, data, err, sizeof(err));
             send_res(id, r == ESP_OK, data, err);
             return;
