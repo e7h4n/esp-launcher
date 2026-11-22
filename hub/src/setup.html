@@ -103,17 +103,25 @@ const onHub = location.protocol === "https:" && (location.pathname.startsWith("/
 // "access": legacy /ops/setup behind Cloudflare Access (service-token credentials).
 const MODE = "__HUB_MODE__";
 const CLERK_PK = "__CLERK_PUBLISHABLE_KEY__", CLERK_FAPI = "__CLERK_FAPI__";
+// clerk-js v6 needs its UI package (@clerk/ui) passed in explicitly, or components never render.
+function clerkScript(src, pk) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = src; s.async = true; s.crossOrigin = "anonymous";
+    if (pk) s.setAttribute("data-clerk-publishable-key", pk);
+    s.onload = resolve; s.onerror = () => reject(new Error("failed to load " + src));
+    document.head.appendChild(s);
+  });
+}
+async function loadClerk(fapi, pk) {
+  await clerkScript(`https://${fapi}/npm/@clerk/ui@1/dist/ui.browser.js`);
+  await clerkScript(`https://${fapi}/npm/@clerk/clerk-js@6/dist/clerk.browser.js`, pk);
+  await window.Clerk.load({ ui: { ClerkUI: window.__internal_ClerkUICtor } });
+  return window.Clerk;
+}
 let clerkReady = null;
 if (MODE === "clerk" && CLERK_FAPI && !CLERK_FAPI.startsWith("__")) {
-  clerkReady = new Promise((resolve, reject) => {
-    const sc = document.createElement("script");
-    sc.src = `https://${CLERK_FAPI}/npm/@clerk/clerk-js@6/dist/clerk.browser.js`;
-    sc.async = true; sc.crossOrigin = "anonymous";
-    sc.setAttribute("data-clerk-publishable-key", CLERK_PK);
-    sc.onload = () => window.Clerk.load().then(() => resolve(window.Clerk), reject);
-    sc.onerror = () => reject(new Error("Clerk failed to load"));
-    document.head.appendChild(sc);
-  });
+  clerkReady = loadClerk(CLERK_FAPI, CLERK_PK);
 }
 async function sessionToken() {
   const c = await clerkReady;

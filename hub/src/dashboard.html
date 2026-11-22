@@ -131,15 +131,27 @@ $("addKey").onclick = async () => {
   } catch (x) { alert(x.message); }
 };
 
+// clerk-js v6 needs its UI package (@clerk/ui) passed in explicitly, or components never render.
+function clerkScript(src, pk) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = src; s.async = true; s.crossOrigin = "anonymous";
+    if (pk) s.setAttribute("data-clerk-publishable-key", pk);
+    s.onload = resolve; s.onerror = () => reject(new Error("failed to load " + src));
+    document.head.appendChild(s);
+  });
+}
+async function loadClerk(fapi, pk) {
+  await clerkScript(`https://${fapi}/npm/@clerk/ui@1/dist/ui.browser.js`);
+  await clerkScript(`https://${fapi}/npm/@clerk/clerk-js@6/dist/clerk.browser.js`, pk);
+  await window.Clerk.load({ ui: { ClerkUI: window.__internal_ClerkUICtor } });
+  return window.Clerk;
+}
+
 if (!FAPI || FAPI.startsWith("__")) {
   $("cfg").classList.remove("hidden");
 } else {
-  const sc = document.createElement("script");
-  sc.src = `https://${FAPI}/npm/@clerk/clerk-js@6/dist/clerk.browser.js`;
-  sc.async = true; sc.crossOrigin = "anonymous";
-  sc.setAttribute("data-clerk-publishable-key", PK);
-  sc.onload = async () => {
-    await window.Clerk.load();
+  loadClerk(FAPI, PK).then(() => {
     if (!window.Clerk.user) {
       window.Clerk.mountSignIn($("signin"), { forceRedirectUrl: location.href, signUpForceRedirectUrl: location.href });
       return;
@@ -148,8 +160,7 @@ if (!FAPI || FAPI.startsWith("__")) {
     $("app").classList.remove("hidden");
     loadDevices().catch((x) => ($("devices").innerHTML = `<tr><td colspan="6" class="bad">${esc(x.message)}</td></tr>`));
     loadKeys().catch((x) => ($("keys").innerHTML = `<tr><td colspan="5" class="bad">${esc(x.message)}</td></tr>`));
-  };
-  document.head.appendChild(sc);
+  }).catch((x) => { $("cfg").textContent = "登录组件加载失败：" + x.message; $("cfg").classList.remove("hidden"); });
 }
 </script>
 </body>
