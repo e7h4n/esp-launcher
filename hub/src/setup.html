@@ -230,12 +230,12 @@ if (FLOW) {
     $("go").textContent = "添加并写入设备";
   } else if (FLOW === "reset") {
     h1.textContent = "重置 " + dev0;
-    sub.textContent = "重新给设备写入 Wi-Fi 和一个新的设备令牌，旧令牌立即作废。进入配网模式：关机后按住配网键开机并保持 3 秒（Coffee Watch / StopWatch 是 select 键）；只刷了 launcher、还没装应用的板子，开机后长按 BOOT 键 3 秒。";
+    sub.textContent = "重新给设备写入 Wi-Fi 和一个新的设备令牌，旧令牌立即作废。让设备进入 launcher：关机后按住 launcher 键开机并保持 3 秒（Coffee Watch / StopWatch 是 select 键），蓝牙配网会自动打开；只刷了 launcher、还没装应用的板子，开机后长按 BOOT 键 3 秒。";
     $("deviceId").value = dev0; $("deviceId").readOnly = true; $("rotate").checked = true;
     $("go").textContent = "重置并写入设备";
   } else if (FLOW === "wifi") {
     h1.textContent = "给 " + dev0 + " 添加 Wi-Fi";
-    sub.textContent = "设备会记住多个网络，自动连信号最好的。进入配网模式：关机后按住配网键开机并保持 3 秒（Coffee Watch / StopWatch 是 select 键）；只刷了 launcher、还没装应用的板子，开机后长按 BOOT 键 3 秒。";
+    sub.textContent = "设备会记住多个网络，自动连信号最好的。让设备进入 launcher：关机后按住 launcher 键开机并保持 3 秒（Coffee Watch / StopWatch 是 select 键），蓝牙配网会自动打开；只刷了 launcher、还没装应用的板子，开机后长按 BOOT 键 3 秒。";
     $("deviceId").value = dev0; $("deviceId").readOnly = true; $("wifiOnly").checked = true;
     $("label").closest("section").querySelector('label[for="label"]').classList.add("hidden");
     $("label").classList.add("hidden");

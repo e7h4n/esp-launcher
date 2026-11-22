@@ -1170,18 +1170,26 @@ esp_err_t okou_agent_start(const okou_config_t *cfg)
     s_rolled_back = esp_ota_get_last_invalid_partition() != NULL;
     record_rollback();
 
-#if CONFIG_OKOU_SETUP_BUTTON_GPIO >= 0
+#if defined(CONFIG_OKOU_LAUNCHER_BUTTON_GPIO) && CONFIG_OKOU_LAUNCHER_BUTTON_GPIO >= 0
     if (g_okou_cfg.role == OKOU_ROLE_APP) {
-        /* Setup gesture: button held while the app starts -> launcher with BLE provisioning. */
-        const gpio_num_t pin = (gpio_num_t)CONFIG_OKOU_SETUP_BUTTON_GPIO;
+        /* Button held while the app starts -> boot into the launcher and stay there. */
+        const gpio_num_t pin = (gpio_num_t)CONFIG_OKOU_LAUNCHER_BUTTON_GPIO;
         gpio_set_direction(pin, GPIO_MODE_INPUT);
         gpio_set_pull_mode(pin, GPIO_PULLUP_ONLY);
         if (gpio_get_level(pin) == 0) {
-            ESP_LOGI(TAG, "setup button held: keep holding to open provisioning");
+            ESP_LOGI(TAG, "launcher button held: keep holding to boot into the launcher");
             int64_t t0 = now_us();
             while (gpio_get_level(pin) == 0) {
-                if (now_us() - t0 >= (int64_t)CONFIG_OKOU_SETUP_BUTTON_HOLD_MS * US_PER_MS) {
-                    okou_enter_setup(); /* does not return on success */
+                if (now_us() - t0 >= (int64_t)CONFIG_OKOU_LAUNCHER_BUTTON_HOLD_MS * US_PER_MS) {
+                    const esp_partition_t *lp = okou_launcher_partition();
+                    if (lp) {
+                        okou_nvs_set_u8(OKOU_KEY_HOLD, 1);
+                        if (esp_ota_set_boot_partition(lp) == ESP_OK) {
+                            ESP_LOGW(TAG, "launcher button: rebooting into %s (stays there)", lp->label);
+                            vTaskDelay(pdMS_TO_TICKS(100));
+                            esp_restart();
+                        }
+                    }
                     break;
                 }
                 vTaskDelay(pdMS_TO_TICKS(20));

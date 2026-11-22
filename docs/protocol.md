@@ -204,10 +204,11 @@ app area (launcher slots 2.5 MB each, app 2.94 MB).
   SDK start and reset to 0 once a hub `ack` is received. If it reaches 3, the SDK boots the
   launcher instead of continuing.
 - `reboot target=launcher` from the app sets the boot partition to the last valid launcher slot.
-- A running app boots straight back into itself, so an offline device cannot reach the launcher's
-  BLE provisioning on its own. With `CONFIG_OKOU_SETUP_BUTTON_GPIO` set (e.g. 1 on the M5Stack
-  StopWatch), holding that button for `CONFIG_OKOU_SETUP_BUTTON_HOLD_MS` (3 s) while the app
-  starts calls `okou_enter_setup()`: the launcher keeps BLE provisioning open until the hub acks.
+- A running app boots straight back into itself. With `CONFIG_OKOU_LAUNCHER_BUTTON_GPIO` set (e.g. 1,
+  the select button, on the M5Stack StopWatch), holding that button for 3 s while the app starts
+  reboots into the launcher and keeps it there (one-shot `okl/hold`): BLE provisioning is open
+  (always while offline, 5 min while online) and the hub can install apps. `reboot target=app` or
+  the next power cycle starts the app again.
 - The launcher never auto-starts the app while `okl/pending` exists. Otherwise it starts the app
   automatically 3 s after boot if the app partition holds a valid image, unless a hub request
   arrived during that window or `okl/stay` is set (`param.set stay_in_launcher=1`).

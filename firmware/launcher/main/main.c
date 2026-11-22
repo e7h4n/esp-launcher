@@ -112,6 +112,12 @@ void app_main(void)
              has_pending, s_stay, hold, fail_boots, app_failed);
     prov_start();
     prov_serial_start();
+    if (hold) {
+        /* Entered on purpose (app button gesture or hub "reboot target=launcher"): BLE
+         * provisioning is open while offline anyway; also keep it open 5 min while online. */
+        prov_open_window(300);
+        ESP_LOGI(TAG, "held in the launcher: BLE provisioning open for 5 min; reboot target=app to leave");
+    }
 
     int64_t t0 = esp_timer_get_time();
     int64_t autostart_at = t0 + (app_failed ? (int64_t)CONFIG_OKL_FAILSAFE_WAIT_S * 1000000

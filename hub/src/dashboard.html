@@ -114,8 +114,8 @@ const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 const ago = (ms) => { if (!ms) return "—"; const s = Math.round((Date.now() - ms) / 1000); return s < 90 ? `${s} 秒前` : s < 5400 ? `${Math.round(s / 60)} 分钟前` : s < 129600 ? `${Math.round(s / 3600)} 小时前` : new Date(ms).toLocaleString(); };
 document.querySelectorAll(".host").forEach((e) => (e.textContent = location.host));
 let devices = [];
-// How a device enters the launcher's BLE provisioning (see firmware OKOU_SETUP_BUTTON_GPIO).
-const SETUP_HINT = "关机后按住配网键开机，保持 3 秒（Coffee Watch / StopWatch 是 select 键）；只刷了 launcher、还没装应用的板子，开机后长按 BOOT 键 3 秒。";
+// How a device enters the launcher's BLE provisioning (see firmware OKOU_LAUNCHER_BUTTON_GPIO).
+const SETUP_HINT = "关机后按住设备的 launcher 键开机，保持 3 秒，设备会进入 launcher 并停在那里，同时打开蓝牙配网（Coffee Watch / StopWatch 是 select 键）。只刷了 launcher、还没装应用的板子，开机后长按 BOOT 键 3 秒。";
 document.getElementById("setupHint").textContent = "进入配网模式：" + SETUP_HINT;
 
 async function api(path, opts = {}) {
@@ -143,9 +143,10 @@ function render() {
     return `<tr>
       <td><div>${esc(d.label || d.id)}</div><div class="id">${esc(d.id)}</div></td>
       <td><span class="pill ${d.online ? "on" : ""}"><span class="dot"></span>${d.online ? "在线" : "离线"}</span></td>
-      <td class="fw muted">${esc(fw)}${d.hello ? ` · ${d.hello.role === "app" ? "应用" : "launcher"}` : ""}</td>
+      <td class="fw muted">${esc(fw)}${d.hello ? ` · ${d.hello.role === "app" ? "应用" : "停在 launcher"}` : ""}</td>
       <td class="seen muted">${d.online ? "现在" : ago(d.last_seen)}</td>
       <td><div class="acts">
+        ${d.online && d.hello && d.hello.role === "launcher" ? `<button data-act="startapp" data-id="${esc(d.id)}">启动应用</button>` : ""}
         <button data-act="reboot" data-id="${esc(d.id)}" ${d.online ? "" : "disabled"}>重启</button>
         <button data-act="wifi" data-id="${esc(d.id)}">添加 Wi-Fi</button>
         <button data-act="reset" data-id="${esc(d.id)}">重置</button>
@@ -238,6 +239,10 @@ document.addEventListener("click", async (e) => {
       await rpc(id, "reboot", { target: "self" });
       b.textContent = "重启中…";
       setTimeout(loadDevices, 15000);
+    } else if (b.dataset.act === "startapp") {
+      b.disabled = true; b.textContent = "启动中…";
+      await rpc(id, "reboot", { target: "app" });
+      setTimeout(loadDevices, 12000);
     } else if (b.dataset.act === "wifi") {
       openWifi(id);
     } else if (b.dataset.act === "reset") {
