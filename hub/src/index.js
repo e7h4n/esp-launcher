@@ -199,7 +199,6 @@ async function apiRoute(request, env, url, parts) {
   fwd.headers.set("X-Caller-Type", who.via === "session" ? "user" : "service");
   fwd.headers.set("X-Writes-Require-Human", entry.writes_require_human ? "1" : "0");
   fwd.headers.set("X-Hub-Origin", url.origin);
-  fwd.headers.set("X-Image-Path", entry.token_hash ? "/api/device/images" : "/device/images");
   return deviceStub(env, id).fetch(fwd);
 }
 
@@ -822,7 +821,8 @@ export class DeviceHub extends DurableObject {
       const origin = request.headers.get("X-Hub-Origin");
       const args = {
         kind,
-        url: `${origin}${request.headers.get("X-Image-Path") || "/device/images"}/${sha}`,
+        // download path matches the credential the device is connected with
+        url: `${origin}${this.kvGet("auth") === "token" ? "/api/device/images" : "/device/images"}/${sha}`,
         size: meta.size,
         sha256: sha,
         sig: b.sig || "",
