@@ -7,6 +7,8 @@ on:
     branches: [main]
     paths:
       - "firmware/pyrt/**"
+      - "!firmware/pyrt/examples/**"
+      - "!firmware/pyrt/**.md"
       - "firmware/components/okou_agent/**"
       - ".github/workflows/pyrt.yml"
   workflow_dispatch:

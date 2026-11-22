@@ -34,6 +34,18 @@ tools/pyrt.py okl-c17d24 safe-boot        # main.py wedged? reboot once without 
 
 Ops: `py.exec`, `py.interrupt`, `py.reset`, `py.safe_boot`, `term.write` (docs/protocol.md).
 
+## Verified on PaperColor (2026-11-22, `okl-c17d24`, runtime 0.1.1)
+
+- Wireless install over the C launcher: `install.done` → `hello fw=micropython` →
+  `app.valid {"by":"hub_ack"}`. Image 3.21 MiB (UIFlow2 stock: 4.45 MiB).
+- `py.exec` / eval with the `M5` bindings (battery, display), 7.5 MB free Python heap (PSRAM).
+- `put main.py` + `reset`: 1.9 s; the new script had drawn its screen 3.5 s after the push (the
+  e-paper refresh itself then takes its physical time).
+- Recovery: `interrupt` stops the running script (REPL and `py.exec` still work), `safe-boot`
+  comes back without `main.py`, `reset` runs it again.
+- Known: the first one or two hub connection attempts after boot fail until SNTP has set the
+  clock; the agent retries and connects within seconds.
+
 ## Build
 
 CI only (`.github/workflows/pyrt.yml`, ESP-IDF v5.5.5): checks out UIFlow2 at the pinned commit,

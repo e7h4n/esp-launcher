@@ -111,7 +111,7 @@ def main():
     elif cmd == "put":
         put(dev, rest[0], rest[1] if len(rest) > 1 else os.path.basename(rest[0]))
     elif cmd == "ls":
-        print(run(dev, f"import os\nos.listdir({(rest[0] if rest else '/flash')!r})", eval_=True, quiet=True)["result"])
+        print(run(dev, f"__import__('os').listdir({(rest[0] if rest else '/flash')!r})", eval_=True, quiet=True)["result"])
     elif cmd == "cat":
         run(dev, f"print(open({rest[0]!r}).read(), end='')")
     elif cmd == "rm":
