@@ -207,6 +207,21 @@ export default {
       if (parts[1] === "enroll" && parts.length === 2 && request.method === "POST") {
         return enroll(request, env, url, who);
       }
+      if (parts[1] === "clerk-users" && parts.length === 2 && request.method === "GET") {
+        // admin (behind Access): find Clerk user ids, e.g. to assign legacy devices to their owner
+        if (!env.CLERK_SECRET_KEY) return err(503, "CLERK_SECRET_KEY not configured");
+        const r = await fetch("https://api.clerk.com/v1/users?limit=50&order_by=-created_at", {
+          headers: { Authorization: `Bearer ${env.CLERK_SECRET_KEY}` },
+        });
+        if (!r.ok) return err(502, `clerk: HTTP ${r.status}`);
+        const users = (await r.json()).map((u) => ({
+          id: u.id,
+          email: (u.email_addresses || []).find((e) => e.id === u.primary_email_address_id)?.email_address || null,
+          created_at: u.created_at,
+          last_sign_in_at: u.last_sign_in_at,
+        }));
+        return json({ users });
+      }
       if (parts[1] === "whoami" && parts.length === 2) {
         return json({ type: who.type, email: who.email || null, client_id: who.clientId || null });
       }

@@ -5,20 +5,42 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ESP Hub</title>
 <style>
-  :root { color-scheme: light dark; --b: #8884; --m: #888; }
-  body { font: 15px/1.5 -apple-system, system-ui, sans-serif; max-width: 920px; margin: 0 auto; padding: 24px 16px 64px; }
-  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 24px; }
-  h1 { font-size: 20px; margin: 0; } h2 { font-size: 16px; margin: 28px 0 8px; }
-  table { width: 100%; border-collapse: collapse; } th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--b); }
+  :root { color-scheme: light dark; --b: #8883; --m: #888; --ok: #16a34a; --bad: #dc2626; --acc: #2563eb; }
+  * { box-sizing: border-box; }
+  body { font: 15px/1.5 -apple-system, system-ui, "PingFang SC", sans-serif; max-width: 960px; margin: 0 auto; padding: 24px 16px 64px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+  h1 { font-size: 20px; margin: 0; } h2 { font-size: 16px; margin: 0; }
+  .bar { display: flex; align-items: center; justify-content: space-between; margin: 8px 0 12px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--b); vertical-align: middle; }
   th { font-weight: 600; color: var(--m); font-size: 13px; }
-  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
-  input { font: inherit; padding: 6px 8px; border: 1px solid var(--b); border-radius: 6px; background: transparent; color: inherit; }
-  button, .btn { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--b); background: transparent; color: inherit; cursor: pointer; text-decoration: none; }
-  button.primary, .btn.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
-  .muted { color: var(--m); font-size: 13px; } .ok { color: #16a34a; } .bad { color: #dc2626; }
-  .secret { font-family: ui-monospace, monospace; word-break: break-all; padding: 10px; border: 1px dashed #d97706; border-radius: 6px; margin: 8px 0; }
-  code, pre { font-family: ui-monospace, monospace; font-size: 13px; } pre { padding: 10px; border: 1px solid var(--b); border-radius: 6px; overflow-x: auto; }
-  .hidden { display: none; }
+  .id { color: var(--m); font-size: 12px; font-family: ui-monospace, monospace; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--m); } .on .dot { background: var(--ok); }
+  .muted { color: var(--m); font-size: 13px; }
+  .acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  button, .btn { font: inherit; font-size: 14px; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--b); background: transparent; color: inherit; cursor: pointer; text-decoration: none; white-space: nowrap; }
+  button:disabled { opacity: .4; cursor: default; }
+  .primary { background: var(--acc); color: #fff; border-color: var(--acc); }
+  .danger { color: var(--bad); }
+  input { font: inherit; padding: 7px 9px; border: 1px solid var(--b); border-radius: 6px; background: transparent; color: inherit; width: 100%; }
+  dialog { border: 1px solid var(--b); border-radius: 12px; padding: 18px 20px; width: min(440px, 92vw); }
+  dialog::backdrop { background: #0006; }
+  dialog h3 { margin: 0 0 10px; font-size: 16px; }
+  dialog label { display: block; font-size: 13px; color: var(--m); margin: 10px 0 4px; }
+  .aps { max-height: 180px; overflow: auto; border: 1px solid var(--b); border-radius: 6px; margin-top: 6px; }
+  .ap { display: flex; justify-content: space-between; padding: 6px 10px; cursor: pointer; font-size: 14px; }
+  .ap:hover { background: #8881; }
+  .row { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 14px; }
+  .msg { font-size: 13px; margin-top: 8px; min-height: 18px; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); }
+  .empty { text-align: center; padding: 40px 0; color: var(--m); }
+  details { margin-top: 40px; border-top: 1px solid var(--b); padding-top: 12px; }
+  summary { cursor: pointer; color: var(--m); }
+  .secret { font-family: ui-monospace, monospace; word-break: break-all; padding: 8px; border: 1px dashed #d97706; border-radius: 6px; margin: 8px 0; font-size: 13px; }
+  pre { font-family: ui-monospace, monospace; font-size: 12px; padding: 10px; border: 1px solid var(--b); border-radius: 6px; overflow-x: auto; }
+  .hidden { display: none !important; }
+  @media (max-width: 640px) { .fw, .seen { display: none; } }
 </style>
 </head>
 <body>
@@ -28,52 +50,60 @@
 </header>
 
 <div id="signin"></div>
-<p id="cfg" class="bad hidden">这个 hub 还没有配置登录（CLERK_PUBLISHABLE_KEY）。</p>
+<p id="cfg" class="bad hidden">这个 hub 还没有配置登录。</p>
 
 <main id="app" class="hidden">
-  <p class="muted">给任意 ESP32 刷通用 launcher，用蓝牙配网接入 hub；之后固件和 Python 脚本都通过 hub 远程更新。传输走 HTTPS。</p>
-
-  <h2>我的设备</h2>
+  <div class="bar">
+    <h2>我的设备 <span class="muted" id="count"></span></h2>
+    <a class="btn primary" href="/setup?mode=add">添加设备</a>
+  </div>
   <table>
-    <thead><tr><th>设备 ID</th><th>名称</th><th>状态</th><th>固件</th><th>最后在线</th><th></th></tr></thead>
-    <tbody id="devices"><tr><td colspan="6" class="muted">加载中…</td></tr></tbody>
+    <thead><tr><th>设备</th><th>状态</th><th class="fw">固件</th><th class="seen">最后在线</th><th></th></tr></thead>
+    <tbody id="devices"><tr><td colspan="5" class="muted">加载中…</td></tr></tbody>
   </table>
-  <div class="row">
-    <a class="btn primary" href="/setup">蓝牙配网添加设备</a>
-    <span class="muted">或只生成设备令牌（USB 串口配网时用）：</span>
-    <input id="newId" placeholder="设备 ID，如 paper-2" size="16">
-    <input id="newLabel" placeholder="名称（可选）" size="14">
-    <button id="addDev">生成令牌</button>
-  </div>
-  <div id="devTok" class="hidden">
-    <div class="muted">设备令牌只显示这一次，写进设备；设备用它连 hub、上报日志、拉取固件：</div>
-    <div class="secret" id="devTokVal"></div>
-  </div>
 
-  <h2>开发者密钥</h2>
-  <p class="muted">用来推送固件和脚本、远程执行和下发命令（命令行、Okou）。只留在你手里，不要写进设备。</p>
-  <table>
-    <thead><tr><th>ID</th><th>备注</th><th>创建</th><th>最近使用</th><th></th></tr></thead>
-    <tbody id="keys"><tr><td colspan="5" class="muted">加载中…</td></tr></tbody>
-  </table>
-  <div class="row">
-    <input id="keyLabel" placeholder="备注，如 Okou、笔记本" size="20">
-    <button id="addKey">新建开发者密钥</button>
-  </div>
-  <div id="keyNew" class="hidden">
-    <div class="muted">密钥只显示这一次：</div>
-    <div class="secret" id="keyNewVal"></div>
-  </div>
-
-  <h2>API</h2>
-  <pre>H=https://<span class="host"></span>/api
-K=okl_key_...   # 开发者密钥
+  <details id="devsec">
+    <summary>开发者：API 与 Okou</summary>
+    <p class="muted">开发者密钥用于推送固件和脚本、远程执行命令（命令行、Okou）。只在新建时显示一次，不要写进设备。</p>
+    <table>
+      <thead><tr><th>ID</th><th>备注</th><th>创建</th><th>最近使用</th><th></th></tr></thead>
+      <tbody id="keys"></tbody>
+    </table>
+    <div class="row" style="justify-content:flex-start">
+      <input id="keyLabel" placeholder="备注，如 Okou" style="max-width:220px">
+      <button id="addKey">新建开发者密钥</button>
+    </div>
+    <div id="keyNew" class="hidden"><div class="secret" id="keyNewVal"></div></div>
+    <pre>H=https://<span class="host"></span>/api
+K=okl_key_...
 curl -H "Authorization: Bearer $K" $H/devices
 curl -H "Authorization: Bearer $K" -X POST $H/devices/&lt;id&gt;/rpc -d '{"op":"status"}'
 curl -H "Authorization: Bearer $K" -X PUT  $H/devices/&lt;id&gt;/images/&lt;sha256&gt; --data-binary @app.bin
-curl -H "Authorization: Bearer $K" -X POST $H/devices/&lt;id&gt;/install -d '{"kind":"app","sha256":"&lt;sha256&gt;","version":"1.0"}'
-curl -H "Authorization: Bearer $K" -X POST $H/devices/&lt;id&gt;/rpc -d '{"op":"py.exec","args":{"code":"print(1+1)"}}'</pre>
+curl -H "Authorization: Bearer $K" -X POST $H/devices/&lt;id&gt;/install -d '{"kind":"app","sha256":"&lt;sha256&gt;","version":"1.0"}'</pre>
+  </details>
 </main>
+
+<dialog id="wifiDlg">
+  <h3 id="wifiTitle">添加 Wi-Fi</h3>
+  <div id="wifiOnline">
+    <div class="muted" id="wifiSaved"></div>
+    <label>Wi-Fi 名称 <button class="btn" id="scan" style="padding:1px 8px;font-size:12px">扫描附近网络</button></label>
+    <div class="aps hidden" id="aps"></div>
+    <input id="ssid" autocomplete="off" style="margin-top:6px">
+    <label>密码（开放网络留空）</label>
+    <input id="pass" type="password" autocomplete="new-password">
+    <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="hidden" style="width:auto"> 隐藏网络</label>
+  </div>
+  <div id="wifiOffline" class="hidden">
+    <p>设备离线，需要通过蓝牙添加 Wi-Fi：让设备进入配网（长按 BOOT 3 秒），用电脑或安卓手机的 Chrome 连接。</p>
+  </div>
+  <div class="msg" id="wifiMsg"></div>
+  <div class="row">
+    <button id="wifiCancel">取消</button>
+    <a class="btn hidden" id="wifiBle">通过蓝牙添加</a>
+    <button class="primary" id="wifiSave">保存到设备</button>
+  </div>
+</dialog>
 
 <script>
 "use strict";
@@ -82,6 +112,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const ago = (ms) => { if (!ms) return "—"; const s = Math.round((Date.now() - ms) / 1000); return s < 90 ? `${s} 秒前` : s < 5400 ? `${Math.round(s / 60)} 分钟前` : s < 129600 ? `${Math.round(s / 3600)} 小时前` : new Date(ms).toLocaleString(); };
 document.querySelectorAll(".host").forEach((e) => (e.textContent = location.host));
+let devices = [];
 
 async function api(path, opts = {}) {
   const t = await window.Clerk.session.getToken();
@@ -90,48 +121,138 @@ async function api(path, opts = {}) {
   if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
   return j;
 }
+async function rpc(id, op, args, timeout_ms = 15000) {
+  const j = await api(`/devices/${id}/rpc`, { method: "POST", body: JSON.stringify({ op, args, timeout_ms }) });
+  if (!j.ok) throw new Error(j.error || "设备返回错误");
+  return j.data || {};
+}
+const cmd = (id, argv) => rpc(id, "cmd", { name: "wifi", argv }, 20000).then((d) => d.output || "");
+
+function render() {
+  $("count").textContent = devices.length ? `(${devices.length})` : "";
+  if (!devices.length) {
+    $("devices").innerHTML = `<tr><td colspan="5" class="empty">还没有设备。<br>先给 ESP32 刷上 launcher，再点右上角“添加设备”。</td></tr>`;
+    return;
+  }
+  $("devices").innerHTML = devices.map((d) => {
+    const fw = d.hello ? `${d.hello.fw.name} ${d.hello.fw.version}` : "—";
+    return `<tr>
+      <td><div>${esc(d.label || d.id)}</div><div class="id">${esc(d.id)}</div></td>
+      <td><span class="pill ${d.online ? "on" : ""}"><span class="dot"></span>${d.online ? "在线" : "离线"}</span></td>
+      <td class="fw muted">${esc(fw)}${d.hello ? ` · ${d.hello.role === "app" ? "应用" : "launcher"}` : ""}</td>
+      <td class="seen muted">${d.online ? "现在" : ago(d.last_seen)}</td>
+      <td><div class="acts">
+        <button data-act="reboot" data-id="${esc(d.id)}" ${d.online ? "" : "disabled"}>重启</button>
+        <button data-act="wifi" data-id="${esc(d.id)}">添加 Wi-Fi</button>
+        <button data-act="reset" data-id="${esc(d.id)}">重置</button>
+        <button data-act="delete" data-id="${esc(d.id)}" class="danger">删除</button>
+      </div></td></tr>`;
+  }).join("");
+}
 
 async function loadDevices() {
-  const { devices } = await api("/devices");
-  $("devices").innerHTML = devices.length ? devices.map((d) => `<tr>
-    <td><code>${esc(d.id)}</code></td><td>${esc(d.label)}</td>
-    <td class="${d.online ? "ok" : "muted"}">${d.online ? "在线" : "离线"}</td>
-    <td>${esc(d.hello ? `${d.hello.fw.name} ${d.hello.fw.version} (${d.hello.role})` : "—")}</td>
-    <td>${ago(d.last_seen)}</td>
-    <td><button data-del="${esc(d.id)}">删除</button></td></tr>`).join("")
-    : `<tr><td colspan="6" class="muted">还没有设备。</td></tr>`;
+  try {
+    devices = (await api("/devices")).devices;
+    render();
+  } catch (x) {
+    $("devices").innerHTML = `<tr><td colspan="5" class="bad">${esc(x.message)}</td></tr>`;
+  }
 }
 
 async function loadKeys() {
   const { keys } = await api("/keys");
   $("keys").innerHTML = keys.length ? keys.map((k) => `<tr>
-    <td><code>${esc(k.id)}…</code></td><td>${esc(k.label)}</td><td>${ago(k.created_at)}</td><td>${ago(k.last_used_at)}</td>
-    <td><button data-revoke="${esc(k.id)}">吊销</button></td></tr>`).join("")
+    <td class="id">${esc(k.id)}…</td><td>${esc(k.label)}</td><td class="muted">${ago(k.created_at)}</td><td class="muted">${ago(k.last_used_at)}</td>
+    <td><button data-revoke="${esc(k.id)}" class="danger">吊销</button></td></tr>`).join("")
     : `<tr><td colspan="5" class="muted">还没有开发者密钥。</td></tr>`;
 }
 
-document.addEventListener("click", async (e) => {
-  const del = e.target.getAttribute("data-del"), rev = e.target.getAttribute("data-revoke");
+// ---- Wi-Fi dialog
+let wifiDev = null;
+function openWifi(id) {
+  const d = devices.find((x) => x.id === id);
+  wifiDev = id;
+  $("wifiTitle").textContent = `给 ${d.label || id} 添加 Wi-Fi`;
+  $("wifiMsg").textContent = ""; $("wifiMsg").className = "msg";
+  $("ssid").value = ""; $("pass").value = ""; $("hidden").checked = false;
+  $("aps").classList.add("hidden"); $("wifiSaved").textContent = "";
+  const online = !!d.online;
+  $("wifiOnline").classList.toggle("hidden", !online);
+  $("wifiOffline").classList.toggle("hidden", online);
+  $("wifiSave").classList.toggle("hidden", !online);
+  $("wifiBle").classList.toggle("hidden", online);
+  $("wifiBle").href = `/setup?mode=wifi&device=${encodeURIComponent(id)}`;
+  $("wifiDlg").showModal();
+  if (online) {
+    cmd(id, ["list"]).then((out) => {
+      const nets = out.trim().split("\n").filter((l) => /^\d+\./.test(l)).map((l) => l.replace(/^\d+\.\s*/, ""));
+      $("wifiSaved").textContent = nets.length ? "已保存：" + nets.join("、") : "";
+    }).catch(() => {});
+  }
+}
+$("scan").onclick = async (e) => {
+  e.preventDefault();
+  $("scan").disabled = true; $("wifiMsg").textContent = "扫描中…";
   try {
-    if (del && confirm(`删除设备 ${del}？它的令牌会失效。`)) { await api(`/devices/${del}`, { method: "DELETE" }); loadDevices(); }
-    if (rev && confirm(`吊销密钥 ${rev}…？`)) { await api(`/keys/${encodeURIComponent(rev)}`, { method: "DELETE" }); loadKeys(); }
-  } catch (x) { alert(x.message); }
+    const out = await cmd(wifiDev, ["scan"]);
+    const aps = out.split("\n").map((l) => /^\s*(-?\d+) dBm\s+ch(\d+)\s+(\S+)\s+(.+)$/.exec(l)).filter(Boolean)
+      .map((m) => ({ rssi: +m[1], auth: m[3], ssid: m[4].trim() }));
+    $("aps").innerHTML = aps.map((a) => `<div class="ap" data-ssid="${esc(a.ssid)}"><span>${esc(a.ssid)}</span><span class="muted">${a.rssi} dBm${a.auth === "open" ? " · 开放" : ""}</span></div>`).join("") || `<div class="ap muted">没有找到网络</div>`;
+    $("aps").classList.remove("hidden");
+    $("wifiMsg").textContent = "";
+  } catch (x) { $("wifiMsg").textContent = x.message; $("wifiMsg").className = "msg bad"; }
+  $("scan").disabled = false;
+};
+$("aps").onclick = (e) => { const a = e.target.closest(".ap"); if (a && a.dataset.ssid) { $("ssid").value = a.dataset.ssid; $("pass").focus(); } };
+$("wifiCancel").onclick = () => $("wifiDlg").close();
+$("wifiSave").onclick = async () => {
+  const ssid = $("ssid").value.trim();
+  if (!ssid) { $("wifiMsg").textContent = "请填写 Wi-Fi 名称"; $("wifiMsg").className = "msg bad"; return; }
+  $("wifiSave").disabled = true; $("wifiMsg").textContent = "写入中…"; $("wifiMsg").className = "msg";
+  try {
+    const argv = ["add", ssid, $("pass").value];
+    if ($("hidden").checked) argv.push("hidden");
+    const out = await cmd(wifiDev, argv);
+    if (!/^saved/.test(out.trim())) throw new Error(out.trim() || "设备没有保存");
+    $("wifiMsg").textContent = "已保存。设备会记住这个网络，在范围内时自动连接。"; $("wifiMsg").className = "msg ok";
+    setTimeout(() => $("wifiDlg").close(), 1500);
+  } catch (x) { $("wifiMsg").textContent = x.message; $("wifiMsg").className = "msg bad"; }
+  $("wifiSave").disabled = false;
+};
+
+// ---- row actions
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-act], button[data-revoke]");
+  if (!b) return;
+  const id = b.dataset.id;
+  try {
+    if (b.dataset.revoke) {
+      if (confirm(`吊销密钥 ${b.dataset.revoke}…？`)) { await api(`/keys/${encodeURIComponent(b.dataset.revoke)}`, { method: "DELETE" }); loadKeys(); }
+    } else if (b.dataset.act === "reboot") {
+      if (!confirm(`重启 ${id}？`)) return;
+      b.disabled = true;
+      await rpc(id, "reboot", { target: "self" });
+      b.textContent = "重启中…";
+      setTimeout(loadDevices, 15000);
+    } else if (b.dataset.act === "wifi") {
+      openWifi(id);
+    } else if (b.dataset.act === "reset") {
+      if (confirm(`重置 ${id}？\n\n通过蓝牙重新写入 Wi-Fi 和一个新的设备令牌，旧令牌立即作废。设备需要在身边。`)) location.href = `/setup?mode=reset&device=${encodeURIComponent(id)}`;
+    } else if (b.dataset.act === "delete") {
+      if (confirm(`删除 ${id}？它的令牌会立即失效，设备将无法再连接 hub。`)) { await api(`/devices/${id}`, { method: "DELETE" }); loadDevices(); }
+    }
+  } catch (x) { alert(x.message); b.disabled = false; }
 });
 
-$("addDev").onclick = async () => {
-  try {
-    const j = await api("/devices", { method: "POST", body: JSON.stringify({ device_id: $("newId").value.trim().toLowerCase(), label: $("newLabel").value.trim() || undefined }) });
-    $("devTokVal").textContent = j.token; $("devTok").classList.remove("hidden"); loadDevices();
-  } catch (x) { alert(x.message); }
-};
 $("addKey").onclick = async () => {
   try {
     const j = await api("/keys", { method: "POST", body: JSON.stringify({ label: $("keyLabel").value.trim() }) });
     $("keyNewVal").textContent = j.secret; $("keyNew").classList.remove("hidden"); loadKeys();
   } catch (x) { alert(x.message); }
 };
+$("devsec").addEventListener("toggle", () => { if ($("devsec").open) loadKeys().catch(() => {}); });
 
-// clerk-js v6 needs its UI package (@clerk/ui) passed in explicitly, or components never render.
+// ---- Clerk (clerk-js v6 needs @clerk/ui passed to Clerk.load, or components never render)
 function clerkScript(src, pk) {
   return new Promise((resolve, reject) => {
     const s = document.createElement("script");
@@ -158,8 +279,8 @@ if (!FAPI || FAPI.startsWith("__")) {
     }
     window.Clerk.mountUserButton($("user"));
     $("app").classList.remove("hidden");
-    loadDevices().catch((x) => ($("devices").innerHTML = `<tr><td colspan="6" class="bad">${esc(x.message)}</td></tr>`));
-    loadKeys().catch((x) => ($("keys").innerHTML = `<tr><td colspan="5" class="bad">${esc(x.message)}</td></tr>`));
+    loadDevices();
+    setInterval(() => { if (!$("wifiDlg").open && document.visibilityState === "visible") loadDevices(); }, 10000);
   }).catch((x) => { $("cfg").textContent = "登录组件加载失败：" + x.message; $("cfg").classList.remove("hidden"); });
 }
 </script>

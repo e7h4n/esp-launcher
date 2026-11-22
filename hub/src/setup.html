@@ -211,6 +211,39 @@ if (MODE === "clerk") {
   pill($("who"), "手动模式", "");
 }
 
+// Hub (Clerk) flows, from the device list: ?mode=add (default) | reset&device=<id> | wifi&device=<id>.
+// Credentials are created and written to the device automatically; nothing is shown to the user.
+const Q = new URLSearchParams(location.search);
+const FLOW = MODE === "clerk" ? (Q.get("mode") || "add") : null;
+if (FLOW) {
+  const dev0 = (Q.get("device") || "").toLowerCase();
+  const h1 = document.querySelector("h1"), sub = document.querySelector(".sub");
+  const back = document.createElement("p");
+  back.innerHTML = '<a href="/" style="font-size:13px">← 返回设备列表</a>';
+  h1.parentNode.insertBefore(back, h1);
+  $("rotate").closest("label").classList.add("hidden");
+  $("wifiOnly").closest("label").classList.add("hidden");
+  $("s-enroll").textContent = "令牌";
+  if (FLOW === "add") {
+    h1.textContent = "添加设备";
+    sub.textContent = "给刷好 launcher 的 ESP32 通电（未配网或长按 BOOT 3 秒时会以 okl-xxxxxx 广播蓝牙），连接后选择 Wi-Fi，其余自动完成。";
+    $("go").textContent = "添加并写入设备";
+  } else if (FLOW === "reset") {
+    h1.textContent = "重置 " + dev0;
+    sub.textContent = "重新给设备写入 Wi-Fi 和一个新的设备令牌，旧令牌立即作废。设备需在蓝牙范围内（长按 BOOT 3 秒进入配网）。";
+    $("deviceId").value = dev0; $("deviceId").readOnly = true; $("rotate").checked = true;
+    $("go").textContent = "重置并写入设备";
+  } else if (FLOW === "wifi") {
+    h1.textContent = "给 " + dev0 + " 添加 Wi-Fi";
+    sub.textContent = "设备离线时通过蓝牙添加（长按 BOOT 3 秒进入配网）。设备会记住多个网络，自动连信号最好的。";
+    $("deviceId").value = dev0; $("deviceId").readOnly = true; $("wifiOnly").checked = true;
+    $("label").closest("section").querySelector('label[for="label"]').classList.add("hidden");
+    $("label").classList.add("hidden");
+    $("s-enroll").classList.add("hidden");
+    $("go").textContent = "写入 Wi-Fi";
+  }
+}
+
 function onNotify(ev) {
   const text = new TextDecoder().decode(ev.target.value);
   let m;
@@ -317,7 +350,8 @@ $("go").onclick = async () => {
       if (m.state === "online") { step("wifi", "done"); step("hub", "done"); step("online", "done"); break; }
       if (m.state === "error") { throw new Error(m.detail || "设备报告错误"); }
     }
-    log(`设备已上线。现在可以在 Okou 里远程管理 ${id}。`);
+    log(FLOW ? `设备已上线。` : `设备已上线。现在可以在 Okou 里远程管理 ${id}。`);
+    if (FLOW) setTimeout(() => { location.href = "/"; }, 2500);
   } catch (e) {
     ["enroll", "write", "wifi", "hub", "online"].forEach((s) => { if ($("s-" + s).className === "on") step(s, "fail"); });
     log("失败: " + e.message);
